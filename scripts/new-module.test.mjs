@@ -163,10 +163,11 @@ test("[EP00-TBR-001-CA1] the module list in .dependency-cruiser.cjs is exactly t
 });
 
 // Rejections: exit != 0, a message on stderr (not a crash), and the root tree byte-identical before and after.
+// `args` is either the arguments before `--root <root>`, or a function root -> full argument list.
 function assertRejected(args, seed, { listsValidNames = false } = {}) {
   const root = makeRoot(seed);
   const before = snapshot(root);
-  const r = generate([...args, "--root", root]);
+  const r = generate(typeof args === "function" ? args(root) : [...args, "--root", root]);
   assert.equal(typeof r.status, "number", `el proceso no terminó con un código (señal ${r.signal})`);
   assert.notEqual(r.status, 0, `se esperaba rechazo para ${JSON.stringify(args)}:\n${r.stdout}`);
   assert.ok(r.stderr.trim().length > 0, "el rechazo debe explicar el motivo por stderr");
@@ -215,6 +216,40 @@ describe("[EP00-TBR-001-CA1] generator rejects invalid input without writing any
   it("[EP00-TBR-001-CA1] rejects when a file already has the module name", () => {
     assertRejected(["compras"], { "src/app/compras": "synthetic file, not a folder\n" });
   });
+
+  it("[EP00-TBR-001-CA1] rejects --root without a value and does not fall back to the real repo", () => {
+    assertRejected(() => ["compras", "--root"], EMPTY_SEED);
+    assert.deepEqual(snapshot(join(FRONT, "src", "app")), realAppBefore, "escribió en el src/app/ real");
+  });
+
+  it("[EP00-TBR-001-CA1] rejects an unknown option (e.g. the old --raiz)", () => {
+    assertRejected((root) => ["compras", "--raiz", root], EMPTY_SEED);
+    assert.deepEqual(snapshot(join(FRONT, "src", "app")), realAppBefore, "escribió en el src/app/ real");
+  });
+
+  it("[EP00-TBR-001-CA1] rejects --root=<dir> (only the separated form is supported)", () => {
+    assertRejected((root) => ["compras", `--root=${root}`], EMPTY_SEED);
+  });
+
+  // Write failures after validation: the generator must leave nothing behind.
+  it("[EP00-TBR-001-CA1] fails cleanly when src/app is a file (write error, nothing left behind)", () => {
+    assertRejected(["compras"], { "src/app": "synthetic file where src/app should be\n" });
+  });
+
+  it("[EP00-TBR-001-CA1] fails cleanly when --root points to a file (write error, nothing left behind)", () => {
+    const parent = makeRoot({ "root-file": "synthetic file used as --root\n" });
+    const before = snapshot(parent);
+    const r = generate(["compras", "--root", join(parent, "root-file")]);
+    assert.notEqual(r.status, 0, `se esperaba rechazo:\n${r.stdout}`);
+    assert.ok(r.stderr.trim().length > 0, "el fallo debe explicarse por stderr");
+    assert.doesNotMatch(r.stderr, /^\s+at .+:\d+:\d+\)?\s*$/m, `error no controlado:\n${r.stderr}`);
+    assert.deepEqual(snapshot(parent), before, "el generador dejó restos al fallar");
+  });
+});
+
+test("[EP00-TBR-001-CA1] package.json exposes the generator as `npm run module:new`", () => {
+  const { scripts } = JSON.parse(readFileSync(join(FRONT, "package.json"), "utf8"));
+  assert.match(scripts["module:new"] ?? "", /^node scripts\/new-module\.mjs$/);
 });
 
 test("[EP00-TBR-001-CA1] the real src/app/ is untouched by the test run (DA-1)", () => {

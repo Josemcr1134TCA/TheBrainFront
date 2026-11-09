@@ -5,7 +5,7 @@
 import { after, describe, it, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, rmdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, rmdirSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -211,4 +211,14 @@ test("[EP00-TBR-001-CA2] every forbidden rule in .dependency-cruiser.cjs has a t
 test("[EP00-TBR-001-CA2] the frontera rules cover exactly the 8 modules of DEC-0012", () => {
   const modules = config.forbidden.map((r) => r.name).filter((n) => n.startsWith("frontera-")).map((n) => n.slice("frontera-".length));
   assert.deepEqual([...modules].sort(), [...MODULES].sort());
+});
+
+// The cases above run depcruise directly; this pins `npm run arch:check` to that same command.
+// Only the default "err" reporter sets a non-zero exit code: an output-type override would let arch:check pass with violations.
+test("[EP00-TBR-001-CA2] npm run arch:check runs the tests, then depcruise on src with the real config and default reporter", () => {
+  const { scripts } = JSON.parse(readFileSync(join(FRONT, "package.json"), "utf8"));
+  const steps = (scripts["arch:check"] ?? "").split("&&").map((s) => s.trim());
+  assert.deepEqual(steps, ["npm run arch:test", "depcruise src --config .dependency-cruiser.cjs"]);
+  const tested = (scripts["arch:test"] ?? "").split(/\s+/);
+  for (const f of ["scripts/arch-check.test.mjs", "scripts/new-module.test.mjs"]) assert.ok(tested.includes(f), `arch:test no corre ${f}`);
 });
