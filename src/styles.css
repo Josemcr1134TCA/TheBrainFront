@@ -1,0 +1,10 @@
+/* Estilos globales de The Brain. Tailwind 4 con el tema del design system (src/ui/tokens/theme.css, generado). */
+/* Solo existen los colores, espacios, radios, sombras, fuentes y tipografías de src/ui/tokens/tokens.json (D-017, D-018). */
+@import "tailwindcss";
+@import "./ui/tokens/theme.css";
+
+@layer base {
+  body {
+    @apply bg-bg font-sans text-ink;
+  }
+}
