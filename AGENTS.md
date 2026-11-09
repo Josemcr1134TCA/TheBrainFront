@@ -7,6 +7,22 @@ Interfaz de The Brain para GUNA: Angular 22 y Tailwind CSS 4, sin librería de c
 2. Consulta `src/ui/docs/the-brain-design-system.html` (versión 6, D-039). Ahí están los principios, «Contenido y tono», color, tipografía, espacio, patrones de pantalla y la anatomía de cada componente. Para leer solo el CSS de componentes usa `src/ui/docs/components.css`. Piezas disponibles: AppFrame, AccountMenu, PageLayout, Banner, Confirm, EmptyState, Skeleton, Field, SelectCombo, CheckboxSwitch, DateField, FileDrop, StatusBadge, Tabs, ActionList, además de Buttons, DataTable, FilterSelect, SideSheet, StepBar, StepCard, StatusBar, History, DocLink, DealCard, Threshold y las demás del documento (D-047, D-048).
 3. Si trabajas desde el arnés de The Brain, además rigen su `CLAUDE.md`, el contrato de tarea y `.claude/scope.txt`. Construyes **exactamente** la UI aprobada por el PO (`docs/ui/<ID>/` del arnés).
 
+## Estructura (DEC-0012 del arnés)
+El frontend **no** es hexagonal: el dominio y las reglas viven en TheBrainApi. Cada módulo es ligero:
+```
+src/app/<modulo>/      catalogo, abastecimiento, compras, inventario, comercial, inteligencia, integracion, administracion
+  index.ts             API pública del módulo (sus rutas); nadie importa sus internos
+  pages/               componentes enrutables
+  components/          piezas del módulo, armadas solo con el design system
+  data/                cliente de TheBrainApi del módulo y paso de DTO a modelo de vista
+  model/               tipos de vista
+src/app/core/          marco de la app, autenticación, interceptores y configuración de HTTP
+src/ui/                design system
+```
+- Solo `data/` usa `HttpClient`; `core/` y `app.config.ts` solo lo configuran. Páginas y componentes piden datos a `data/`.
+- `data/` y `model/` no importan `pages/` ni `components/`.
+- Mientras la API no publique un contrato, `data/` devuelve datos sintéticos detrás de la misma interfaz.
+
 ## Reglas
 - **Si falta un componente, una variante o un token, detente y pregunta (D-009).** La v6 no trae `Banner`, `EmptyState`, `Confirm`, `Tabs`, `Badge`, `Switch`, `Field` y otras piezas (D-045): no las dibujes. Describe qué falta y espera la decisión. No lo inventes.
 - **Solo existen los tokens de `src/ui/tokens/tokens.json`** (D-017, D-018). No uses la paleta ni las escalas por defecto de Tailwind (`bg-white` y `p-7` no compilan), valores arbitrarios (`bg-[#…]`, `p-[13px]`), modificadores de opacidad (`bg-accent/50`) ni clases integradas sin token (`font-bold`, `duration-150`, `p-px`). El tema no puede bloquear estas últimas (D-019); las atrapa `scripts/validate-ui.mjs` (D-037).
@@ -32,7 +48,7 @@ Interfaz de The Brain para GUNA: Angular 22 y Tailwind CSS 4, sin librería de c
 | `npm run ds:validate` | Solo el validador estático (D-037), con sus pruebas |
 | `npm run ds:tokens` | Regenera el CSS de tokens desde `tokens.json` |
 | `npm run ds:doc` | Regenera el documento de referencia |
-| `npm run arch:check` | Reglas de arquitectura del arnés (`.dependency-cruiser.cjs`): cada módulo en `src/app/<modulo>/` solo se importa por su `index.ts`, `src/ui/` no importa `src/app/`, nada de Nest, Prisma ni drivers de base, el Hub nunca se llama desde el front y no hay ciclos. Debe pasar antes de cada PR |
+| `npm run arch:check` | Reglas de arquitectura del arnés (`.dependency-cruiser.cjs`): cada módulo en `src/app/<modulo>/` solo se importa por su `index.ts`, `src/ui/` no importa `src/app/`, solo `data/` usa `HttpClient`, `data/` y `model/` no importan la vista, nada de Nest, Prisma ni drivers de base, el Hub nunca se llama desde el front y no hay ciclos. Debe pasar antes de cada PR |
 | `npm run build` · `npm test -- --watch=false` | Compila y corre las pruebas |
 
 Node `^22.22.3`, `^24.15.0` o `>=26` (ver `.nvmrc`).
