@@ -5,7 +5,8 @@
  * fronteras entre módulos, design system independiente y nada de backend ni del Hub en el navegador.
  *
  * Estructura que se asume: src/app/<modulo>/ por cada uno de los 8 módulos de CLAUDE.md del arnés,
- * con src/app/<modulo>/index.ts como API pública del módulo. src/ui/ es el design system.
+ * con src/app/<modulo>/index.ts como API pública del módulo y carpetas pages/, components/, data/ y model/
+ * (DEC-0012 del arnés: no es hexagonal; solo data/ habla con la API). src/ui/ es el design system.
  * Uso: npm run arch:check (corre en CI).
  */
 const MODULOS = ["catalogo", "abastecimiento", "compras", "inventario", "comercial", "inteligencia", "integracion", "administracion"];
@@ -39,6 +40,20 @@ module.exports = {
       severity: "error",
       from: { path: "^src/" },
       to: { path: "(hub-client|HubClient|compaql)" },
+    },
+    {
+      name: "http-solo-en-data",
+      comment: "Solo data/ de cada módulo habla con TheBrainApi (DEC-0012 del arnés). core/ y app.config.ts solo configuran HTTP.",
+      severity: "error",
+      from: { path: "^src/", pathNot: "^src/app/([^/]+/data/|core/|app\\.config\\.ts$)" },
+      to: { path: "node_modules/@angular/common/.*http" },
+    },
+    {
+      name: "capas-del-modulo",
+      comment: "data/ y model/ no conocen la vista: no importan pages/ ni components/ (DEC-0012 del arnés).",
+      severity: "error",
+      from: { path: "^src/app/[^/]+/(data|model)/" },
+      to: { path: "^src/app/[^/]+/(pages|components)/" },
     },
     {
       name: "sin-ciclos",
