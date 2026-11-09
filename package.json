@@ -11,7 +11,9 @@
     "ds:doc": "node scripts/build-doc.mjs",
     "ds:check": "node scripts/build-tokens.mjs --check && node scripts/build-doc.mjs --check && node scripts/test-theme.mjs && npm run ds:validate",
     "ds:validate": "node scripts/validate-ui.mjs --prueba && node scripts/validate-ui.mjs",
-    "arch:check": "depcruise src --config .dependency-cruiser.cjs"
+    "module:new": "node scripts/new-module.mjs",
+    "arch:test": "node --test scripts/arch-check.test.mjs scripts/new-module.test.mjs",
+    "arch:check": "npm run arch:test && depcruise src --config .dependency-cruiser.cjs"
   },
   "private": true,
   "packageManager": "npm@11.12.1",
