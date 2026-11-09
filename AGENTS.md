@@ -38,6 +38,10 @@ src/ui/                design system
   - Sin emoji. Mayúscula solo al inicio.
   - Cifras «$1,850,000» y «24.5 %» (con espacio); fechas cortas «9 oct» (con año si no es el vigente: «30-sep-2026»).
 - **Reglas de negocio** fuera del design system (D-008, D-035). Si la regla la cambiaría el equipo comercial o Finanzas, no la escribes tú: pregúntala. Su significado vive en una ficha `R-` y su valor en la configuración de la base; en el código se cita `R-NNNN`, nunca la cifra.
+- **Idioma del código** (DEC-0013 del arnés):
+  - Todo el código va en inglés: identificadores, archivos y carpetas, opciones de CLI, comentarios y títulos de prueba.
+  - Los textos para personas van en español: pantallas, mensajes de CLI y errores.
+  - Los nombres existentes en español (módulos, reglas de `arch:check` y `scripts/validate-ui.mjs`) se migran en la historia EP00-TBR-014. Mientras tanto, se citan tal como están.
 - **Datos**: solo sintéticos. Nunca nombres reales de fabricantes, marcas, clientes ni personas.
 - **Decisiones nuevas**: se registran en `src/ui/DECISIONS.md` con el siguiente identificador libre (D-010). Las aprueba una persona en el PR.
 
