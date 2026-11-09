@@ -1,0 +1,207 @@
+/* The Brain · tema de Tailwind 4. GENERADO por scripts/build-tokens.mjs desde src/ui/tokens/tokens.json; no editar a mano. */
+/* Se importa después de tailwindcss en src/styles.css. Los valores oscuros redefinen las mismas variables por tema (D-006, D-026). */
+@theme static {
+  /* sin paleta ni escalas por defecto de Tailwind */
+  --color-*: initial;
+  --spacing: initial;
+  --spacing-*: initial;
+  --radius-*: initial;
+  --shadow-*: initial;
+  --inset-shadow-*: initial;
+  --drop-shadow-*: initial;
+  --font-*: initial;
+  --text-*: initial;
+  --ease-*: initial;
+  --container-*: initial;
+
+  /* color */
+  --color-navy: #00093c;
+  --color-on-navy: #ffffff;
+  --color-brand-red: #d71920;
+  --color-accent: #2a368e;
+  --color-on-accent: #ffffff;
+  --color-accent-soft: #eceefb;
+  --color-focus: #2a368e;
+  --color-bg: #f6f7fa;
+  --color-sidebar: #f0f1f6;
+  --color-surface: #ffffff;
+  --color-surface-hover: #f2f3f8;
+  --color-surface-selected: #eaecf8;
+  --color-ink: #0b1033;
+  --color-ink-2: #3a4061;
+  --color-ink-muted: #5d6380;
+  --color-line: #e5e7ef;
+  --color-line-strong: #868ca5;
+  --color-ok: #0a6a78;
+  --color-ok-soft: #e3f3f5;
+  --color-corr: #8f5400;
+  --color-corr-soft: #fdf2e1;
+  --color-bad: #bf241b;
+  --color-bad-soft: #fdecea;
+  --color-strat: #5b3fa6;
+  --color-strat-soft: #f1edfb;
+  --color-ai: #2a368e;
+  --color-overlay: #0b103340;
+  --color-tooltip-bg: #0b1033;
+  --color-tooltip-ink: #ffffff;
+
+  /* spacing */
+  --spacing-1: 4px;
+  --spacing-2: 8px;
+  --spacing-3: 12px;
+  --spacing-4: 16px;
+  --spacing-5: 20px;
+  --spacing-6: 24px;
+  --spacing-8: 32px;
+
+  /* radius */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 999px;
+
+  /* size */
+  --size-control-sm: 28px;
+  --size-control-md: 32px;
+  --size-row: 56px;
+
+  /* shadow */
+  --shadow-card: 0 1px 2px rgba(11,16,51,0.05);
+  --shadow-pop: 0 8px 24px -6px rgba(11,16,51,0.18), 0 2px 6px rgba(11,16,51,0.06);
+  --shadow-sheet: 0 24px 64px -12px rgba(11,16,51,0.28);
+
+  /* font */
+  --font-sans: "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* text */
+  --text-display: 28px;
+  --text-display--line-height: 34px;
+  --text-display--font-weight: 600;
+  --text-display--letter-spacing: -0.025em;
+  --text-title: 18px;
+  --text-title--line-height: 26px;
+  --text-title--font-weight: 600;
+  --text-title--letter-spacing: -0.015em;
+  --text-heading: 14px;
+  --text-heading--line-height: 20px;
+  --text-heading--font-weight: 600;
+  --text-heading--letter-spacing: -0.005em;
+  --text-body: 14px;
+  --text-body--line-height: 20px;
+  --text-body--font-weight: 400;
+  --text-body--letter-spacing: 0;
+  --text-cell: 13px;
+  --text-cell--line-height: 18px;
+  --text-cell--font-weight: 400;
+  --text-cell--letter-spacing: 0;
+  --text-label: 12px;
+  --text-label--line-height: 16px;
+  --text-label--font-weight: 500;
+  --text-label--letter-spacing: 0;
+  --text-micro: 11px;
+  --text-micro--line-height: 14px;
+  --text-micro--font-weight: 500;
+  --text-micro--letter-spacing: 0;
+  --text-kpi: 24px;
+  --text-kpi--line-height: 30px;
+  --text-kpi--font-weight: 500;
+  --text-kpi--letter-spacing: -0.03em;
+  --text-num: 13px;
+  --text-num--line-height: 18px;
+  --text-num--font-weight: 500;
+  --text-num--letter-spacing: 0;
+
+  /* motion */
+  --motion-duration-fast: 120ms;
+  --motion-duration-base: 200ms;
+
+  /* ease */
+  --ease-out: cubic-bezier(.23, 1, .32, 1);
+
+  /* container */
+  --container-sheet: 480px;
+  --container-sidebar: 232px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --color-brand-red: #ff5c63;
+    --color-accent: #a6aeff;
+    --color-on-accent: #0a0d1f;
+    --color-accent-soft: #1f2654;
+    --color-focus: #a6aeff;
+    --color-bg: #0a0d1f;
+    --color-sidebar: #0d1127;
+    --color-surface: #11152e;
+    --color-surface-hover: #181d3b;
+    --color-surface-selected: #1d2450;
+    --color-ink: #eceef8;
+    --color-ink-2: #c3c8df;
+    --color-ink-muted: #959cbd;
+    --color-line: #232a4d;
+    --color-line-strong: #5a628c;
+    --color-ok: #52cfdb;
+    --color-ok-soft: #0f2a2e;
+    --color-corr: #f2b65e;
+    --color-corr-soft: #2f2410;
+    --color-bad: #ff7d75;
+    --color-bad-soft: #3a1718;
+    --color-strat: #c4b2ff;
+    --color-strat-soft: #271f4b;
+    --color-ai: #a6aeff;
+    --color-overlay: #00000099;
+    --color-tooltip-bg: #eceef8;
+    --color-tooltip-ink: #0b1033;
+    --shadow-card: 0 1px 2px rgba(0,0,0,0.4);
+    --shadow-pop: 0 8px 24px -6px rgba(0,0,0,0.6);
+    --shadow-sheet: 0 24px 64px -12px rgba(0,0,0,0.7);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --color-brand-red: #ff5c63;
+  --color-accent: #a6aeff;
+  --color-on-accent: #0a0d1f;
+  --color-accent-soft: #1f2654;
+  --color-focus: #a6aeff;
+  --color-bg: #0a0d1f;
+  --color-sidebar: #0d1127;
+  --color-surface: #11152e;
+  --color-surface-hover: #181d3b;
+  --color-surface-selected: #1d2450;
+  --color-ink: #eceef8;
+  --color-ink-2: #c3c8df;
+  --color-ink-muted: #959cbd;
+  --color-line: #232a4d;
+  --color-line-strong: #5a628c;
+  --color-ok: #52cfdb;
+  --color-ok-soft: #0f2a2e;
+  --color-corr: #f2b65e;
+  --color-corr-soft: #2f2410;
+  --color-bad: #ff7d75;
+  --color-bad-soft: #3a1718;
+  --color-strat: #c4b2ff;
+  --color-strat-soft: #271f4b;
+  --color-ai: #a6aeff;
+  --color-overlay: #00000099;
+  --color-tooltip-bg: #eceef8;
+  --color-tooltip-ink: #0b1033;
+  --shadow-card: 0 1px 2px rgba(0,0,0,0.4);
+  --shadow-pop: 0 8px 24px -6px rgba(0,0,0,0.6);
+  --shadow-sheet: 0 24px 64px -12px rgba(0,0,0,0.7);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-duration-fast: 0ms;
+    --motion-duration-base: 0ms;
+  }
+}
