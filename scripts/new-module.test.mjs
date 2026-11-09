@@ -284,6 +284,88 @@ describe("[EP00-TBR-001-CA1] generator rejects invalid input without writing any
   });
 });
 
+// S2: a write that fails after the generator created folders must remove only what that run created.
+// Fault injection: a preload replaces fs.writeFileSync so that writing model/.gitkeep (the last file) throws;
+// syncBuiltinESMExports() propagates the patch to the generator's named ESM import.
+const FAULT_PRELOAD = [
+  "import fs from 'node:fs';",
+  "import { syncBuiltinESMExports } from 'node:module';",
+  "const original = fs.writeFileSync;",
+  "fs.writeFileSync = (file, ...rest) => {",
+  "  if (String(file).split(/[\\\\/]/).slice(-2).join('/') === 'model/.gitkeep') {",
+  "    throw Object.assign(new Error('fallo inyectado por la prueba'), { code: 'EIO' });",
+  "  }",
+  "  return original(file, ...rest);",
+  "};",
+  "syncBuiltinESMExports();",
+  "",
+].join("\n");
+
+function generateWithLateFailure(args, cwd = makeRoot()) {
+  const preload = join(makeRoot({ "fault.mjs": FAULT_PRELOAD }), "fault.mjs");
+  const r = spawnSync(process.execPath, ["--import", pathToFileURL(preload).href, GENERATOR, ...args],
+    { cwd, encoding: "utf8", timeout: CHILD_TIMEOUT_MS, killSignal: "SIGKILL" });
+  if (r.error?.code === "ETIMEDOUT" || r.status === null) assert.fail(`el generador no terminó (señal ${r.signal})`);
+  assert.equal(r.status, 1, `se esperaba fallo con código 1:\n${r.stdout}${r.stderr}`);
+  assert.match(r.stderr, /fallo inyectado por la prueba/, `el fallo inyectado no llegó al generador:\n${r.stderr}`);
+  assert.doesNotMatch(r.stderr, /^\s+at .+:\d+:\d+\)?\s*$/m, `error no controlado:\n${r.stderr}`);
+  return r;
+}
+
+describe("[EP00-TBR-001-CA1] late write failure rolls back only what the run created (S2)", () => {
+  it("[EP00-TBR-001-CA1] --root that does not exist: the whole created chain is removed, the parent stays intact", () => {
+    const parent = makeRoot(EMPTY_SEED);
+    const before = snapshot(parent);
+    generateWithLateFailure(["compras", "--root", join(parent, "new-root", "deeper")]);
+    assert.ok(!existsSync(join(parent, "new-root")), "quedó la raíz creada por la corrida fallida");
+    assert.deepEqual(snapshot(parent), before, "el generador dejó restos o tocó contenido ajeno");
+  });
+
+  it("[EP00-TBR-001-CA1] root without src/: src/ is removed and the root keeps its content", () => {
+    const root = makeRoot(EMPTY_SEED);
+    const before = snapshot(root);
+    generateWithLateFailure(["compras", "--root", root]);
+    assert.deepEqual(snapshot(root), before, "el generador dejó restos o tocó contenido ajeno");
+  });
+
+  it("[EP00-TBR-001-CA1] existing src/app with other modules: only the new module folder is removed", () => {
+    const root = makeRoot({
+      "src/app/app.routes.ts": "export const routes = [];\n",
+      "src/app/inventario/index.ts": "export const routes = [];\n",
+      "src/app/inventario/data/witness.txt": "synthetic witness\n",
+    });
+    const before = snapshot(root);
+    generateWithLateFailure(["compras", "--root", root]);
+    assert.deepEqual(snapshot(root), before, "la reversión borró contenido ajeno o dejó restos");
+  });
+});
+
+// Q3: a missing, broken or rule-less .dependency-cruiser.cjs ends with code 1 and a message, no stack trace,
+// nothing written. The generator reads the config next to its own repo, so it runs from a synthetic copy.
+describe("[EP00-TBR-001-CA1] unusable dependency-cruiser config is rejected cleanly (Q3)", () => {
+  for (const [label, config] of [
+    ["missing", undefined],
+    ["with a syntax error", "module.exports = {\n"],
+    ["without frontera-<module> rules", "module.exports = { forbidden: [{ name: 'sin-ciclos', from: {}, to: { circular: true } }] };\n"],
+    ["without a forbidden list", "module.exports = {};\n"],
+  ]) {
+    it(`[EP00-TBR-001-CA1] config ${label}: exit 1, message on stderr, nothing written`, () => {
+      const fakeRepo = makeRoot({
+        "scripts/new-module.mjs": readFileSync(GENERATOR, "utf8"),
+        ...(config === undefined ? {} : { ".dependency-cruiser.cjs": config }),
+      });
+      const root = makeRoot(EMPTY_SEED);
+      const before = { repo: snapshot(fakeRepo), root: snapshot(root) };
+      const r = runNode(join(fakeRepo, "scripts", "new-module.mjs"), ["compras", "--root", root], root);
+      assert.equal(r.status, 1, `se esperaba código 1:\n${r.stdout}${r.stderr}`);
+      assert.match(r.stderr, /dependency-cruiser\.cjs/, `el mensaje no nombra la configuración:\n${r.stderr}`);
+      assert.doesNotMatch(r.stderr, /^\s+at .+:\d+:\d+\)?\s*$/m, `error no controlado:\n${r.stderr}`);
+      assert.deepEqual(snapshot(root), before.root, "el generador escribió en --root");
+      assert.deepEqual(snapshot(fakeRepo), before.repo, "el generador escribió en su repo");
+    });
+  }
+});
+
 test("[EP00-TBR-001-CA1] package.json exposes the generator as `npm run module:new`", () => {
   const { scripts } = JSON.parse(readFileSync(join(FRONT, "package.json"), "utf8"));
   assert.match(scripts["module:new"] ?? "", /^node scripts\/new-module\.mjs$/);
