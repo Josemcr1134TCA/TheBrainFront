@@ -1,0 +1,3 @@
+# LF en todos los sistemas: los generadores (--check) comparan byte a byte.
+* text=auto eol=lf
+*.ico binary
