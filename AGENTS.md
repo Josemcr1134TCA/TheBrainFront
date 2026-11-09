@@ -32,6 +32,7 @@ Interfaz de The Brain para GUNA: Angular 22 y Tailwind CSS 4, sin librería de c
 | `npm run ds:validate` | Solo el validador estático (D-037), con sus pruebas |
 | `npm run ds:tokens` | Regenera el CSS de tokens desde `tokens.json` |
 | `npm run ds:doc` | Regenera el documento de referencia |
+| `npm run arch:check` | Reglas de arquitectura del arnés (`.dependency-cruiser.cjs`): cada módulo en `src/app/<modulo>/` solo se importa por su `index.ts`, `src/ui/` no importa `src/app/`, nada de Nest, Prisma ni drivers de base, el Hub nunca se llama desde el front y no hay ciclos. Debe pasar antes de cada PR |
 | `npm run build` · `npm test -- --watch=false` | Compila y corre las pruebas |
 
 Node `^22.22.3`, `^24.15.0` o `>=26` (ver `.nvmrc`).

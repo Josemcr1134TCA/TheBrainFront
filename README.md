@@ -15,6 +15,7 @@ Requiere Node `^22.22.3`, `^24.15.0` o `>=26` (`.nvmrc`).
 npm install
 npm start                 # http://localhost:4200
 npm run ds:check          # tokens, documento, tema y validador estático
+npm run arch:check        # reglas de arquitectura del arnés (dependency-cruiser)
 npm run build
 npm test -- --watch=false
 ```
