@@ -16,6 +16,12 @@ const DEPCRUISE = join(FRONT, "node_modules", "dependency-cruiser", "bin", "depe
 const TMP = join(FRONT, "tmp");
 const config = createRequire(import.meta.url)(CONFIG);
 
+// Resource limits (S1): a bounded number of depcruise processes at a time, and nothing may hang the job.
+// Each case runs two depcruise processes, so CONCURRENCY cases means up to 2 * CONCURRENCY children.
+const CONCURRENCY = 4;
+const CHILD_TIMEOUT_MS = 60_000;
+const TEST_TIMEOUT_MS = CHILD_TIMEOUT_MS + 15_000;
+
 const MODULES = ["catalogo", "abastecimiento", "compras", "inventario", "comercial", "inteligencia", "integracion", "administracion"];
 const TSCONFIG = JSON.stringify({ extends: "../../tsconfig.json", compilerOptions: { types: [] }, include: ["src/**/*.ts"] });
 
@@ -39,15 +45,26 @@ function makeFixture(files) {
 }
 
 // Runs depcruise exactly like `npm run arch:check`, with the real config, from the fixture directory.
+// A child that exceeds CHILD_TIMEOUT_MS is killed and the promise rejects with a clear message.
 function cruise(dir, extraArgs = []) {
   return new Promise((done, fail) => {
-    const child = spawn(process.execPath, [DEPCRUISE, "src", "--config", CONFIG, ...extraArgs], { cwd: dir });
+    const child = spawn(process.execPath, [DEPCRUISE, "src", "--config", CONFIG, ...extraArgs], {
+      cwd: dir,
+      timeout: CHILD_TIMEOUT_MS,
+      killSignal: "SIGKILL",
+    });
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8").on("data", (d) => (stdout += d));
     child.stderr.setEncoding("utf8").on("data", (d) => (stderr += d));
     child.on("error", fail);
-    child.on("close", (status) => done({ status, stdout: stdout.replace(/\x1b\[[0-9;]*m/g, ""), stderr }));
+    child.on("close", (status, signal) => {
+      if (status === null) {
+        fail(new Error(`depcruise no terminó (señal ${signal}, límite ${CHILD_TIMEOUT_MS / 1000} s) en ${dir}\n${stdout}${stderr}`));
+        return;
+      }
+      done({ status, stdout: stdout.replace(/\x1b\[[0-9;]*m/g, ""), stderr });
+    });
   });
 }
 
@@ -151,9 +168,9 @@ const CASES = [
   },
 ];
 
-describe("[EP00-TBR-001-CA2] arch:check rules", { concurrency: true }, () => {
+describe("[EP00-TBR-001-CA2] arch:check rules", { concurrency: CONCURRENCY }, () => {
   for (const c of CASES) {
-    it(`[EP00-TBR-001-CA2] ${c.title} and reports the import`, async () => {
+    it(`[EP00-TBR-001-CA2] ${c.title} and reports the import`, { timeout: TEST_TIMEOUT_MS }, async () => {
       const dir = makeFixture(c.files);
       const [text, json] = await Promise.all([cruise(dir), cruise(dir, ["-T", "json"])]);
 
@@ -179,7 +196,7 @@ describe("[EP00-TBR-001-CA2] arch:check rules", { concurrency: true }, () => {
     });
   }
 
-  it("[EP00-TBR-001-CA2] passes (exit 0) on a compliant module layout (negative control)", async () => {
+  it("[EP00-TBR-001-CA2] passes (exit 0) on a compliant module layout (negative control)", { timeout: TEST_TIMEOUT_MS }, async () => {
     const dir = makeFixture({
       "src/app/compras/model/order.ts": "export interface Order { id: string; }\n",
       "src/app/compras/data/orders-api.ts":

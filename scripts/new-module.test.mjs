@@ -55,11 +55,22 @@ function makeRoot(files = {}) {
   return dir;
 }
 
+// Resource limit (S1): no child process (generator, depcruise, tsc) may hang the job.
+const CHILD_TIMEOUT_MS = 60_000;
+
+// Runs a Node script synchronously with a timeout; a child that does not finish fails the test with a clear message.
+function runNode(script, args, cwd) {
+  const r = spawnSync(process.execPath, [script, ...args], { cwd, encoding: "utf8", timeout: CHILD_TIMEOUT_MS, killSignal: "SIGKILL" });
+  if (r.error?.code === "ETIMEDOUT" || r.status === null) {
+    assert.fail(`${script} no terminó (señal ${r.signal}, límite ${CHILD_TIMEOUT_MS / 1000} s) en ${cwd}\n${r.stdout ?? ""}${r.stderr ?? ""}`);
+  }
+  return r;
+}
+
 // Runs the generator. cwd is a scratch dir so a generator that ignores --root cannot hit the real repo silently.
-function generate(args) {
+function generate(args, cwd = makeRoot()) {
   assert.ok(existsSync(GENERATOR), `no existe el generador ${GENERATOR}`);
-  const cwd = makeRoot();
-  return spawnSync(process.execPath, [GENERATOR, ...args], { cwd, encoding: "utf8" });
+  return runNode(GENERATOR, args, cwd);
 }
 
 before(() => {
@@ -128,13 +139,13 @@ describe("[EP00-TBR-001-CA1] generated module structure", () => {
 
     it("[EP00-TBR-001-CA1] generated modules imported through index.ts pass arch:check (real config)", () => {
       for (const m of MODULES) assert.ok(existsSync(join(root, "src", "app", m)), `falta el módulo ${m}`);
-      const r = spawnSync(process.execPath, [DEPCRUISE, "src", "--config", CONFIG], { cwd: root, encoding: "utf8" });
+      const r = runNode(DEPCRUISE, ["src", "--config", CONFIG], root);
       assert.equal(r.status, 0, `arch:check falló sobre los módulos generados:\n${r.stdout}${r.stderr}`);
     });
 
     it("[EP00-TBR-001-CA1] generated index.ts files type-check with the repo TypeScript", () => {
       for (const m of MODULES) assert.ok(existsSync(join(root, "src", "app", m, "index.ts")), `falta ${m}/index.ts`);
-      const r = spawnSync(process.execPath, [TSC, "--noEmit", "-p", join(root, "tsconfig.app.json")], { cwd: root, encoding: "utf8" });
+      const r = runNode(TSC, ["--noEmit", "-p", join(root, "tsconfig.app.json")], root);
       assert.equal(r.status, 0, `tsc falló:\n${r.stdout}${r.stderr}`);
     });
 
@@ -229,6 +240,32 @@ describe("[EP00-TBR-001-CA1] generator rejects invalid input without writing any
 
   it("[EP00-TBR-001-CA1] rejects --root=<dir> (only the separated form is supported)", () => {
     assertRejected((root) => ["compras", `--root=${root}`], EMPTY_SEED);
+  });
+
+  // Q1: an ambiguous target must be rejected, not resolved silently (e.g. "last one wins").
+  it("[EP00-TBR-001-CA1] rejects a repeated --root and leaves both roots untouched", () => {
+    const first = makeRoot(EMPTY_SEED);
+    const second = makeRoot(EMPTY_SEED);
+    const before = { first: snapshot(first), second: snapshot(second) };
+    const r = generate(["compras", "--root", first, "--root", second]);
+    assert.notEqual(r.status, 0, `se esperaba rechazo con --root repetido:\n${r.stdout}`);
+    assert.ok(r.stderr.trim().length > 0, "el rechazo debe explicar el motivo por stderr");
+    assert.doesNotMatch(r.stderr, /^\s+at .+:\d+:\d+\)?\s*$/m, `el rechazo es un error no controlado:\n${r.stderr}`);
+    assert.deepEqual(snapshot(first), before.first, "el generador escribió en el primer --root");
+    assert.deepEqual(snapshot(second), before.second, "el generador escribió en el segundo --root");
+  });
+
+  // Q2: an option-like token is not a directory; it must not create ./--x/ in the working directory.
+  it("[EP00-TBR-001-CA1] rejects --root followed by an option-like value (--x) without creating it in the cwd", () => {
+    const cwd = makeRoot(EMPTY_SEED);
+    const before = snapshot(cwd);
+    const r = generate(["compras", "--root", "--x"], cwd);
+    assert.notEqual(r.status, 0, `se esperaba rechazo con --root --x:\n${r.stdout}`);
+    assert.ok(r.stderr.trim().length > 0, "el rechazo debe explicar el motivo por stderr");
+    assert.doesNotMatch(r.stderr, /^\s+at .+:\d+:\d+\)?\s*$/m, `el rechazo es un error no controlado:\n${r.stderr}`);
+    assert.ok(!existsSync(join(cwd, "--x")), "el generador creó ./--x en el directorio de trabajo");
+    assert.deepEqual(snapshot(cwd), before, "el generador escribió en el directorio de trabajo");
+    assert.deepEqual(snapshot(join(FRONT, "src", "app")), realAppBefore, "escribió en el src/app/ real");
   });
 
   // Write failures after validation: the generator must leave nothing behind.
