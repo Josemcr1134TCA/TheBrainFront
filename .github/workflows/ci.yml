@@ -17,5 +17,7 @@ jobs:
       - run: npm ci
       - name: Design system al día (tokens, documento de referencia, tema)
         run: npm run ds:check
+      - name: Reglas de arquitectura del arnés (fronteras entre módulos, design system, sin backend ni Hub)
+        run: npm run arch:check
       - run: npm run build
       - run: npm test -- --watch=false
