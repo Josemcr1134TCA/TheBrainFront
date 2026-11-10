@@ -1,6 +1,6 @@
 // Front module generator (DEC-0012). Usage: node scripts/new-module.mjs <name> [--root <dir>]
 // Creates src/app/<name>/ with index.ts and the pages, components, data and model folders.
-// Valid names come from the `frontera-<m>` rules of .dependency-cruiser.cjs (exact match, no normalizing).
+// Valid names come from the `boundary-<module>` rules of .dependency-cruiser.cjs (exact match, no normalizing).
 // Messages for people are in Spanish; code and comments in English (DEC-0013).
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -30,11 +30,11 @@ function validNames() {
     fail(`No se pudo cargar .dependency-cruiser.cjs (${error.code ?? error.message}); no se modifica nada.`);
   }
   const rules = Array.isArray(config?.forbidden) ? config.forbidden : [];
-  const found = rules.map((rule) => rule?.name).filter((n) => typeof n === "string" && n.startsWith("frontera-"));
+  const found = rules.map((rule) => rule?.name).filter((n) => typeof n === "string" && n.startsWith("boundary-"));
   if (found.length === 0) {
-    fail("No hay reglas frontera-<módulo> en .dependency-cruiser.cjs; no se modifica nada.");
+    fail("No hay reglas boundary-<módulo> en .dependency-cruiser.cjs; no se modifica nada.");
   }
-  return found.map((n) => n.slice("frontera-".length));
+  return found.map((n) => n.slice("boundary-".length));
 }
 
 function parseArgs(argv) {
