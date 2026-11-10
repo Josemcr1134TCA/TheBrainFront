@@ -1,63 +1,63 @@
 /**
- * Reglas de arquitectura del frontend, adaptadas de la plantilla del arnés
- * (the-brain-harness: plantillas-ci/dependency-cruiser.cjs y docs/reglas-ci.md; DEC-0005 punto 5).
- * La plantilla es del backend (domain/application/infrastructure, Prisma, Hub). Aquí rige la misma idea:
- * fronteras entre módulos, design system independiente y nada de backend ni del Hub en el navegador.
+ * Frontend architecture rules, adapted from the harness template
+ * (the-brain-harness: plantillas-ci/dependency-cruiser.cjs and docs/reglas-ci.md; DEC-0005 point 5).
+ * The template is for the backend (domain/application/infrastructure, Prisma, Hub). Here the same idea applies:
+ * boundaries between modules, an independent design system, and no backend or Hub code in the browser.
  *
- * Estructura que se asume: src/app/<modulo>/ por cada uno de los 8 módulos de CLAUDE.md del arnés,
- * con src/app/<modulo>/index.ts como API pública del módulo y carpetas pages/, components/, data/ y model/
- * (DEC-0012 del arnés: no es hexagonal; solo data/ habla con la API). src/ui/ es el design system.
- * Uso: npm run arch:check (corre en CI).
+ * Assumed layout: src/app/<module>/ for each of the 8 modules (names fixed by DEC-0017 of the harness),
+ * with src/app/<module>/index.ts as the public API of the module and the folders pages/, components/, data/ and model/
+ * (DEC-0012 of the harness: not hexagonal; only data/ talks to the API). src/ui/ is the design system.
+ * Usage: npm run arch:check (runs in CI).
  */
-const MODULOS = ["catalogo", "abastecimiento", "compras", "inventario", "comercial", "inteligencia", "integracion", "administracion"];
+const MODULES = ["catalog", "replenishment", "purchasing", "inventory", "commercial", "intelligence", "integration", "administration"];
 
 module.exports = {
   forbidden: [
-    ...MODULOS.map((m) => ({
-      name: `frontera-${m}`,
-      comment: `Nadie importa internos de ${m}; solo su API pública (src/app/${m}/index.ts).`,
+    ...MODULES.map((m) => ({
+      name: `boundary-${m}`,
+      comment: `Nobody imports internals of ${m}; only its public API (src/app/${m}/index.ts).`,
       severity: "error",
       from: { path: "^src/", pathNot: `^src/app/${m}/` },
       to: { path: `^src/app/${m}/`, pathNot: `^src/app/${m}/index\\.ts$` },
     })),
     {
-      name: "ui-independiente",
-      comment: "El design system (src/ui/) no conoce la app: no importa nada de src/app/.",
+      name: "ui-independent",
+      comment: "The design system (src/ui/) does not know the app: it imports nothing from src/app/.",
       severity: "error",
       from: { path: "^src/ui/" },
       to: { path: "^src/app/" },
     },
     {
-      name: "sin-backend-en-el-front",
-      comment: "El navegador no usa Nest, Prisma ni drivers de PostgreSQL: los datos pasan por TheBrainApi.",
+      name: "no-backend-in-front",
+      comment: "The browser uses no Nest, Prisma or PostgreSQL drivers: data goes through TheBrainApi.",
       severity: "error",
       from: { path: "^src/" },
       to: { path: "node_modules/(@nestjs|@prisma|prisma|pg|postgres)/" },
     },
     {
-      name: "hub-solo-por-api",
-      comment: "El front nunca llama al Hub ni a Compaql: solo a TheBrainApi, que tiene la capa anticorrupción.",
+      name: "hub-only-via-api",
+      comment: "The front never calls the Hub or Compaql: only TheBrainApi, which holds the anti-corruption layer.",
       severity: "error",
       from: { path: "^src/" },
       to: { path: "(hub-client|HubClient|compaql)" },
     },
     {
-      name: "http-solo-en-data",
-      comment: "Solo data/ de cada módulo habla con TheBrainApi (DEC-0012 del arnés). core/ y app.config.ts solo configuran HTTP.",
+      name: "http-only-in-data",
+      comment: "Only the data/ folder of each module talks to TheBrainApi (DEC-0012 of the harness). core/ and app.config.ts only configure HTTP.",
       severity: "error",
       from: { path: "^src/", pathNot: "^src/app/([^/]+/data/|core/|app\\.config\\.ts$)" },
       to: { path: "node_modules/@angular/common/.*http" },
     },
     {
-      name: "capas-del-modulo",
-      comment: "data/ y model/ no conocen la vista: no importan pages/ ni components/ (DEC-0012 del arnés).",
+      name: "module-layers",
+      comment: "data/ and model/ do not know the view: they do not import pages/ or components/ (DEC-0012 of the harness).",
       severity: "error",
       from: { path: "^src/app/[^/]+/(data|model)/" },
       to: { path: "^src/app/[^/]+/(pages|components)/" },
     },
     {
-      name: "sin-ciclos",
-      comment: "Sin dependencias circulares.",
+      name: "no-cycles",
+      comment: "No circular dependencies.",
       severity: "error",
       from: {},
       to: { circular: true },

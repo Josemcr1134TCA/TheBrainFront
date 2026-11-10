@@ -10,7 +10,7 @@
     "ds:tokens": "node scripts/build-tokens.mjs",
     "ds:doc": "node scripts/build-doc.mjs",
     "ds:check": "node scripts/build-tokens.mjs --check && node scripts/build-doc.mjs --check && node scripts/test-theme.mjs && npm run ds:validate",
-    "ds:validate": "node scripts/validate-ui.mjs --prueba && node scripts/validate-ui.mjs",
+    "ds:validate": "node scripts/validate-ui.mjs --test && node --test scripts/validate-ui.test.mjs && node scripts/validate-ui.mjs",
     "module:new": "node scripts/new-module.mjs",
     "arch:test": "node --test scripts/arch-check.test.mjs scripts/new-module.test.mjs",
     "arch:check": "npm run arch:test && depcruise src --config .dependency-cruiser.cjs"
