@@ -10,7 +10,7 @@ Interfaz de The Brain para GUNA: Angular 22 y Tailwind CSS 4, sin librería de c
 ## Estructura (DEC-0012 del arnés)
 El frontend **no** es hexagonal: el dominio y las reglas viven en TheBrainApi. Cada módulo es ligero:
 ```
-src/app/<modulo>/      catalogo, abastecimiento, compras, inventario, comercial, inteligencia, integracion, administracion
+src/app/<modulo>/      catalog, replenishment, purchasing, inventory, commercial, intelligence, integration, administration
   index.ts             API pública del módulo (sus rutas); nadie importa sus internos
   pages/               componentes enrutables
   components/          piezas del módulo, armadas solo con el design system
@@ -41,7 +41,7 @@ src/ui/                design system
 - **Idioma del código** (DEC-0013 del arnés):
   - Todo el código va en inglés: identificadores, archivos y carpetas, opciones de CLI, comentarios y títulos de prueba.
   - Los textos para personas van en español: pantallas, mensajes de CLI y errores.
-  - Los nombres existentes en español (módulos, reglas de `arch:check` y `scripts/validate-ui.mjs`) se migran en la historia EP00-TBR-014. Mientras tanto, se citan tal como están.
+  - Los nombres que estaban en español (módulos, reglas de `arch:check` y `scripts/validate-ui.mjs`) ya se migraron al inglés (EP00-TBR-014, DEC-0017 del arnés).
 - **Datos**: solo sintéticos. Nunca nombres reales de fabricantes, marcas, clientes ni personas.
 - **Decisiones nuevas**: se registran en `src/ui/DECISIONS.md` con el siguiente identificador libre (D-010). Las aprueba una persona en el PR.
 
