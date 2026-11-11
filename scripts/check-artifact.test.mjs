@@ -449,6 +449,21 @@ describe("[EP00-TBR-002-CA3] forbidden contents (mandatory minimum)", () => {
     });
   }
 
+  // Round 1 re-review · S1: the linear JWT search splits runs of token characters at the dots, so it must still find a
+  // service_role JWT that is not alone in its run: after a dotted prefix, after an anon JWT joined by a dot, and glued
+  // after word characters. The sample must start where the JWT starts (offsets inside the run).
+  test("[EP00-TBR-002-CA3] finds a service_role JWT inside a dotted run, right after an anon JWT and glued after word characters", () => {
+    const scanArtifact = exported("scanArtifact");
+    const list = exported("loadPatternList")(LIST);
+    const secret = triggerOf("service-role-jwt");
+    const anon = jwt({ iss: "supabase", ref: "synthetictestref", role: "anon", iat: 1700000000, exp: 2000000000 });
+    const lines = ["/* synthetic */", `cfg.api.${secret};`, `const k="${anon}.${secret}";`, `const h="Bearer_${secret}";`, `const a="${anon}";`];
+    const findings = scanArtifact(makeArtifact({ [MAIN_JS]: `${lines.join("\n")}\n` }), list);
+    assert.deepEqual(findings.map((f) => `${f.path}:${f.line}|${f.rule}`), [2, 3, 4].map((n) => `${MAIN_JS}:${n}|service-role-jwt`), `se esperaba el JWT service_role en las líneas 2, 3 y 4 y nada más: ${JSON.stringify(findings)}`);
+    for (const f of findings) assert.ok(f.sample.startsWith(secret.slice(0, 6)), `sample debe empezar donde empieza el JWT: ${JSON.stringify(f)}`);
+    assert.deepEqual(leakedPieces(JSON.stringify(findings), secret), [], "sample no puede mostrar el secreto");
+  });
+
   test("[EP00-TBR-002-CA3] reviews contents of binary files", () => {
     const bytes = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0xff]), Buffer.from(`\n${triggerOf("service-role-jwt")}\n`), Buffer.from([0, 1, 2])]);
     const r = scan(makeArtifact({ "browser/media/logo.png": bytes }));
