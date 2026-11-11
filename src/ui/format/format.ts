@@ -10,7 +10,7 @@ export const TIME_ZONE = 'America/Mexico_City';
 export const NULL_DISPLAY = '—';
 
 const NBSP = ' ';
-// Fixed table: CLDR gives "sept" for September, the product rule asks for "sep" (AJ-5).
+// Fixed table: CLDR abbreviates September with four letters, the product rule asks for three (AJ-5).
 const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'] as const;
 
 type Maybe<T> = T | null | undefined;
