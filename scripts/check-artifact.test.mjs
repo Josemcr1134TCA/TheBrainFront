@@ -9,6 +9,9 @@
 // [EP00-TBR-002-CA3] T3 (after reading T2) pins the dev rules of docs/estado/EP00-TBR-002.md: (1) each finding is
 // { rule, path, line, sample }, findings go to stderr, the exit code is 1 and N counts only files; (2) in exceptions
 // "*" does not cross "/", "**" does and paths are case sensitive, while forbidden names ignore case.
+// [EP00-TBR-002-CA3] Round 1 adds tests for the review findings approved by the dev (docs/estado/EP00-TBR-002.md):
+// S1 linear JWT search, S2 entry guard through symlinks, S3 unsupported file types, Q1 globstar folder boundaries and
+// S6/Q2 broad exception paths. They are written before the fix, so they fail on commit d46985c.
 // [EP00-TBR-002-CA1] package.json has typecheck (R1) plus ci:test and artifact:check with the exact text of §8.6.
 // Synthetic secrets are assembled at runtime so no key-like string is committed (RG-4). No real data.
 // Fixtures live under tmp/ (ignored by git) and are removed afterwards.
@@ -375,6 +378,36 @@ describe("[EP00-TBR-002-CA3] forbidden contents (mandatory minimum)", () => {
     assert.deepEqual(leakedPieces(r.output, secret), [], "la salida no muestra el secreto");
   });
 
+  // Round 1 · S1 (security finding): the JWT search must stay linear. ~200 KB of "eyJ" made the regex quadratic
+  // (~11 s), and a 2 MB bundle would block CI. scanArtifact runs in a child killed after HOSTILE_KILL_MS and only the
+  // scan is timed (not Node's start-up), so the 2 s bound leaves a wide margin for a slow CI runner.
+  const HOSTILE_LIMIT_MS = 2_000;
+  const HOSTILE_KILL_MS = 45_000;
+  const HOSTILE = [
+    ["~210 KB of repeated eyJ", () => "eyJ".repeat(70_000)],
+    ["~210 KB of repeated eyJ split by one dot", () => `${"eyJ".repeat(35_000)}.${"eyJ".repeat(35_000)}`],
+  ];
+  for (const [title, hostile] of HOSTILE) {
+    test(`[EP00-TBR-002-CA3] reviews a hostile file (${title}) in under 2 s and still finds the service_role JWT after it`, () => {
+      assert.ok(existsSync(SCRIPT), "no existe el script scripts/check-artifact.mjs");
+      const path = "browser/chunk-HOSTILE.js";
+      const dir = makeArtifact({ [path]: `${hostile()}\nconst k="${triggerOf("service-role-jwt")}";\n` });
+      const code = [
+        `const m = await import(${JSON.stringify(pathToFileURL(SCRIPT).href)});`,
+        `const list = m.loadPatternList(${JSON.stringify(LIST)});`,
+        `const t0 = performance.now();`,
+        `const findings = m.scanArtifact(${JSON.stringify(dir)}, list);`,
+        `process.stdout.write(JSON.stringify({ ms: performance.now() - t0, findings }));`,
+      ].join("\n");
+      const r = spawnSync(process.execPath, ["--input-type=module", "-e", code], { cwd: FRONT, encoding: "utf8", timeout: HOSTILE_KILL_MS, killSignal: "SIGKILL" });
+      if (r.status === null) assert.fail(`la revisión del archivo hostil no terminó en ${HOSTILE_KILL_MS / 1000} s (señal ${r.signal}): la búsqueda de JWT no está acotada`);
+      assert.equal(r.status, 0, `scanArtifact falló con el archivo hostil\nstderr: ${r.stderr}`);
+      const { ms, findings } = JSON.parse(r.stdout);
+      assert.deepEqual(findings.map((f) => `${f.path}:${f.line}|${f.rule}`), [`${path}:2|service-role-jwt`], `el resultado debe ser exacto: ${JSON.stringify(findings)}`);
+      assert.ok(ms < HOSTILE_LIMIT_MS, `revisar el archivo hostil (${title}) tardó ${Math.round(ms)} ms; el límite es ${HOSTILE_LIMIT_MS} ms (la búsqueda de JWT debe ser lineal)`);
+    });
+  }
+
   test("[EP00-TBR-002-CA3] reviews contents of binary files", () => {
     const bytes = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0xff]), Buffer.from(`\n${triggerOf("service-role-jwt")}\n`), Buffer.from([0, 1, 2])]);
     const r = scan(makeArtifact({ "browser/media/logo.png": bytes }));
@@ -485,6 +518,53 @@ describe("[EP00-TBR-002-CA3] check-artifact fails closed", () => {
       chmodSync(locked, 0o644);
     }
   });
+
+  // Round 1 · S3 (security finding): FIFOs, sockets and devices are neither files nor folders. They must not be
+  // skipped in silence: each one is an «unsupported-type» finding. Only through the CLI, so a script that tried to
+  // read the FIFO would hit the child timeout instead of hanging this process.
+  test("[EP00-TBR-002-CA3] fails with unsupported-type on a FIFO inside the artifact instead of skipping it", (t) => {
+    if (process.platform === "win32") { t.skip("mkfifo no existe en Windows"); return; }
+    const dir = makeArtifact();
+    const fifo = spawnSync("mkfifo", [join(dir, "browser", "pipe")], { encoding: "utf8" });
+    if (fifo.error || fifo.status !== 0) { t.skip(`no se pudo crear un FIFO aquí: ${fifo.error?.code ?? fifo.stderr}`); return; }
+    assertFinding(scan(dir), "browser/pipe", "unsupported-type");
+  });
+
+  // Round 1 · S2 (security finding): the entry guard compared process.argv[1] with the module path without resolving
+  // symlinks, so a call through a symlinked path exited 0 without reviewing anything (fails open). Both cases carry a
+  // dirty artifact: exit 0 here means nothing was reviewed.
+  const runScript = (scriptPath, args, cwd) => {
+    const r = spawnSync(process.execPath, [scriptPath, ...args], { cwd, encoding: "utf8", timeout: CHILD_TIMEOUT_MS, killSignal: "SIGKILL" });
+    if (r.status === null) assert.fail(`check-artifact.mjs no terminó (señal ${r.signal}, límite ${CHILD_TIMEOUT_MS / 1000} s)`);
+    return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "", output: `${r.stdout ?? ""}\n${r.stderr ?? ""}` };
+  };
+
+  test("[EP00-TBR-002-CA3] runs the review when invoked through a symlinked folder (copy under tmp/, dirty default dist)", (t) => {
+    if (process.platform === "win32") { t.skip("los enlaces simbólicos en Windows piden permisos especiales"); return; }
+    assert.ok(existsSync(SCRIPT), "no existe el script scripts/check-artifact.mjs");
+    const base = makeDir("guard-");
+    const real = join(base, "real");
+    mkdirSync(join(real, "scripts"), { recursive: true });
+    copyFileSync(SCRIPT, join(real, "scripts", "check-artifact.mjs"));
+    copyFileSync(LIST, join(real, "scripts", "forbidden-artifact-patterns.json"));
+    const dist = join(real, "dist", "the-brain-front");
+    for (const [path, content] of Object.entries({ ...CLEAN_FILES(), "browser/vercel.json": "{}\n" })) {
+      mkdirSync(dirname(join(dist, path)), { recursive: true });
+      writeFileSync(join(dist, path), content);
+    }
+    try { symlinkSync(real, join(base, "link"), "dir"); } catch (e) { t.skip(`no se pueden crear enlaces simbólicos aquí: ${e.code}`); return; }
+    const r = runScript(join(base, "link", "scripts", "check-artifact.mjs"), [], base);
+    assertFinding(r, "browser/vercel.json", "vercel-config");
+  });
+
+  test("[EP00-TBR-002-CA3] runs the review when the script file itself is reached through a symlink", (t) => {
+    if (process.platform === "win32") { t.skip("los enlaces simbólicos en Windows piden permisos especiales"); return; }
+    assert.ok(existsSync(SCRIPT), "no existe el script scripts/check-artifact.mjs");
+    const link = join(makeDir("guard-"), "check-artifact.mjs");
+    try { symlinkSync(SCRIPT, link, "file"); } catch (e) { t.skip(`no se pueden crear enlaces simbólicos aquí: ${e.code}`); return; }
+    const r = runScript(link, ["--dir", makeArtifact({ "browser/vercel.json": "{}\n" })], FRONT);
+    assertFinding(r, "browser/vercel.json", "vercel-config");
+  });
 });
 
 describe("[EP00-TBR-002-CA3] the real pattern list", () => {
@@ -585,6 +665,26 @@ describe("[EP00-TBR-002-CA3] validatePatternList rejects invalid lists", () => {
       assert.ok(errors.length >= 1, `se esperaba al menos un error para: ${title}`);
     });
   }
+
+  // Round 1 · S6/Q2 (approved by the dev): an exception must name the files it exempts. Rule pinned here:
+  // (a) the last segment of the path may not contain "**", and (b) its name, read before the first "." (a leading "."
+  // aside), must have at least one literal character other than "*". So "*.js", "*.*", "*", "**" and an empty last
+  // segment are too broad, while "vendor-*.js", "*-vendor.js" and "vendor.min.js" name a file.
+  const BROAD_EXCEPTIONS = ["**/*.js", "browser/**", "*.*", "**/*.*", "browser/*", "**/*.min.js", "browser/vendor**", "browser/.*", "browser/vendor/"];
+  for (const path of BROAD_EXCEPTIONS) {
+    test(`[EP00-TBR-002-CA3] rejects a broad exception path (last segment without a literal name before its first dot, or with **): ${path}`, () => {
+      const validatePatternList = exported("validatePatternList");
+      const errors = validatePatternList({ ...validList(), exceptions: [exception({ path })] });
+      assert.ok(Array.isArray(errors) && errors.length >= 1, `la excepción «${path}» exime demasiado y debe rechazarse; errores: ${JSON.stringify(errors)}`);
+    });
+  }
+  const NARROW_EXCEPTIONS = ["browser/vendor-*.js", "browser/**/vendor.js", "**/main-*.js", "browser/*-vendor.js", "browser/vendor.min.js", "browser/vendor/**/lib-*.js"];
+  for (const path of NARROW_EXCEPTIONS) {
+    test(`[EP00-TBR-002-CA3] accepts a narrow exception path whose last segment names a file (control): ${path}`, () => {
+      const validatePatternList = exported("validatePatternList");
+      assert.deepEqual(validatePatternList({ ...validList(), exceptions: [exception({ path })] }), [], `la excepción acotada «${path}» debe aceptarse`);
+    });
+  }
 });
 
 describe("[EP00-TBR-002-CA3] module API", () => {
@@ -639,10 +739,12 @@ describe("[EP00-TBR-002-CA3] module API", () => {
   // One artifact per path: on a case-insensitive disk (macOS) Vendor-1.js and vendor-1.js would be the same file.
   const exemptedPaths = (list, paths, body = `const u="${triggerOf("postgres-url-with-password")}";\n`) =>
     paths.filter((p) => !exported("scanArtifact")(makeArtifact({ [p]: body }), list).some((f) => f.path === p));
+  // Round 1 (S6/Q2): paths are narrow on purpose. "browser/*.js" and "browser/vendor/**" are now rejected by the
+  // validator, so the same semantics are pinned with narrow paths.
   const EXCEPTION_SEMANTICS = [
-    ["* does not cross /", "browser/*.js", ["browser/vendor-1.js"], ["browser/lazy/vendor-1.js"]],
+    ["* does not cross /", "browser/*-vendor.js", ["browser/a-vendor.js"], ["browser/lazy/a-vendor.js"]],
     ["* inside a hashed name does not cross /", "browser/vendor-*.js", ["browser/vendor-SYNTH.js"], ["browser/vendor-x/y.js"]],
-    ["** crosses folders", "browser/vendor/**", ["browser/vendor/a.js", "browser/vendor/a/b/c.js"], ["browser/other/a.js", "browser/main-SYNTH0001.js"]],
+    ["** crosses folders", "browser/vendor/**/lib-*.js", ["browser/vendor/lib-1.js", "browser/vendor/a/b/lib-2.js"], ["browser/other/lib-1.js", "browser/main-SYNTH0001.js"]],
     ["**/ crosses folders before a name", "browser/**/vendor-*.js", ["browser/a/vendor-1.js", "browser/a/b/vendor-2.js"], ["browser/a/main-1.js"]],
     ["paths are case sensitive", "browser/Vendor-*.js", ["browser/Vendor-1.js"], ["browser/vendor-1.js", "browser/VENDOR-1.js"]],
   ];
@@ -653,12 +755,25 @@ describe("[EP00-TBR-002-CA3] module API", () => {
     });
   }
 
-  // Finding of this review (media): "**/" is turned into ".*" and also matches inside a name, so the exception is wider
-  // than written. Standard globstar reading: "**/" means zero or more whole folders. Marked todo until the dev decides.
-  test("[EP00-TBR-002-CA3] exception paths: **/ only spans whole folders (browser/**/vendor-*.js keeps browser/notvendor-1.js)", { todo: "hallazgo T3: «**/» no respeta el límite de carpeta; decide el dev" }, () => {
-    const list = withException("browser/**/vendor-*.js");
-    assert.deepEqual(exemptedPaths(list, ["browser/notvendor-1.js", "browser/xvendor-1.js"]), [], "«**/» no debe cubrir parte de un nombre");
-  });
+  // Round 1 · Q1 (T3 finding, approved by the dev): globstar respects folder boundaries. "**/" means zero or more whole
+  // folders and never matches part of a name; "**" glued to a name never crosses "/".
+  // `valid: true` also asserts that the validator accepts the path; "browser**" may be rejected by S6 (a "**" in the
+  // last segment), so its semantics are checked straight on scanArtifact, which does not validate.
+  const GLOBSTAR = [
+    ["**/ spans zero folders and keeps a partial name", "browser/**/vendor.js", true, ["browser/vendor.js"], ["browser/notvendor.js"]],
+    ["**/ spans several whole folders", "browser/**/vendor.js", true, ["browser/a/b/vendor.js"], ["browser/a/notvendor.js", "browser/a/b/xvendor.js"]],
+    ["**/ spans the hashed name prefix only at a folder boundary", "browser/**/vendor-*.js", true, ["browser/vendor-1.js", "browser/a/vendor-2.js"], ["browser/notvendor-1.js", "browser/xvendor-1.js"]],
+    ["a leading **/ matches the root and any folder but not a partial name", "**/main-*.js", true, ["main-1.js", "browser/main-1.js", "browser/a/main-1.js"], ["browser/xmain-1.js"]],
+    ["** glued to a name never crosses /", "browser**", false, [], ["browser-other/a.js"]],
+  ];
+  for (const [title, path, valid, exempt, kept] of GLOBSTAR) {
+    test(`[EP00-TBR-002-CA3] exception paths, globstar respects folder boundaries: ${title} (${path})`, () => {
+      const list = structuredClone(exported("loadPatternList")(LIST));
+      list.exceptions = [{ rule: "postgres-url-with-password", path, reason: "caso sintético", decision: "DEC-0000" }];
+      if (valid) assert.deepEqual(exported("validatePatternList")(list), [], `la excepción sintética ${path} debe ser válida`);
+      assert.deepEqual(exemptedPaths(list, [...exempt, ...kept]).sort(), [...exempt].sort(), `${path} debe exceptuar solo ${exempt.join(", ") || "nada"}; «**/» vale cero o más carpetas completas`);
+    });
+  }
 
   test("[EP00-TBR-002-CA3] an exception exempts only its own rule in the matched file", () => {
     const list = withException("browser/vendor-*.js");
