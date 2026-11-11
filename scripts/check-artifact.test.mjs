@@ -487,6 +487,26 @@ describe("[EP00-TBR-002-CA3] forbidden contents (mandatory minimum)", () => {
     assert.deepEqual(leakedPieces(JSON.stringify(findings), secret), [], "sample no puede mostrar el secreto");
   });
 
+  // Round 2 re-review: the fix of H-2 skips decoding payloads too short to hold {"role":"<role>"}. The shortest JSON
+  // payload with role service_role is 23 bytes, 31 base64url characters; it and the next lengths (32 and 34 characters)
+  // must still be found, so the shortcut can never cut a real one. The shortest anon payload gives nothing (control).
+  test("[EP00-TBR-002-CA3] finds a service_role JWT with the shortest possible payload (31, 32 and 34 characters) and nothing for a minimal anon one", () => {
+    const scanArtifact = exported("scanArtifact");
+    const list = exported("loadPatternList")(LIST);
+    const header = b64url({ alg: "HS256", typ: "JWT" });
+    const signature = "c3ludGhldGlj" + "Q".repeat(31);
+    const raw = (json) => [header, Buffer.from(json).toString("base64url"), signature].join(".");
+    const role = "service" + "_role";
+    const payloads = [`{"role":"${role}"}`, `{"role":"${role}"} `, `{"role":"${role}"}  `];
+    assert.deepEqual(payloads.map((p) => Buffer.from(p).toString("base64url").length), [31, 32, 34], "autocomprobación: las cargas deben medir 31, 32 y 34 caracteres");
+    for (const p of payloads) assert.equal(JSON.parse(p).role, role, "autocomprobación: cada carga es JSON válido con el rol");
+    const secrets = payloads.map(raw);
+    const lines = ["/* synthetic */", ...secrets.map((s, n) => `const k${n}="${s}";`), `const a="${raw('{"role":"anon"}')}";`];
+    const findings = scanArtifact(makeArtifact({ [MAIN_JS]: `${lines.join("\n")}\n` }), list);
+    assert.deepEqual(findings.map((f) => `${f.path}:${f.line}|${f.rule}`), [2, 3, 4].map((n) => `${MAIN_JS}:${n}|service-role-jwt`), `se esperaba el JWT service_role mínimo en las líneas 2, 3 y 4 y nada más: ${JSON.stringify(findings)}`);
+    for (const secret of secrets) assert.deepEqual(leakedPieces(JSON.stringify(findings), secret), [], "sample no puede mostrar el secreto");
+  });
+
   // Round 1 re-review · S1: the linear JWT search splits runs of token characters at the dots, so it must still find a
   // service_role JWT that is not alone in its run: after a dotted prefix, after an anon JWT joined by a dot, and glued
   // after word characters. The sample must start where the JWT starts (offsets inside the run).
