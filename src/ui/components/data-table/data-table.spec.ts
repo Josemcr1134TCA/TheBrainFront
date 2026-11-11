@@ -9,7 +9,8 @@ import { Component } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import * as publicApi from '../../index';
 import { TB_CLOCK } from '../../format/clock';
-import { TbCellDef, TbDataTable } from './data-table';
+import { TbIcon } from '../icon/icon';
+import { TbCellDef, TbColumn, TbDataTable } from './data-table';
 
 const THEMES = ['light', 'dark'] as const;
 const NBSP = ' ';
@@ -25,7 +26,8 @@ interface Row {
   status: string;
 }
 
-const COLUMNS = [
+// [EP00-TBR-004-CA2] H4: typed with TbColumn, so type is the closed union of column types.
+const COLUMNS: TbColumn<Row>[] = [
   { id: 'name', header: 'Nombre', type: 'text', value: (r: Row) => r.name },
   { id: 'price', header: 'Precio', type: 'money', value: (r: Row) => r.price, sortable: true },
   { id: 'qty', header: 'Existencia', type: 'quantity', value: (r: Row) => r.qty, sortable: true },
@@ -630,6 +632,237 @@ for (const theme of THEMES) {
     });
   });
 }
+
+describe('[EP00-TBR-004-CA2][EP00-TBR-004-CA4] TbDataTable with values of the wrong kind (H2)', () => {
+  it('[EP00-TBR-004-CA2] a date column that receives a number shows «—» without throwing, and the other rows still render', () => {
+    const rows = makeRows(3);
+    const columns: TbColumn<Row>[] = [
+      COLUMNS[0],
+      {
+        id: 'updated',
+        header: 'Actualizado',
+        type: 'date',
+        value: (r: Row) => (r.id === rows[1].id ? 20261009 : r.updated),
+      },
+    ];
+    let el!: HTMLElement;
+    expect(() => (el = render({ rows, columns }).el)).not.toThrow();
+    expect(dataRows(el)).toHaveLength(3);
+    expect(dataRows(el).map((r) => cellsOf(r)[1].textContent?.trim())).toEqual(['9 oct', DASH, '9 oct']);
+    expect(dataRows(el).map((r) => cellsOf(r)[0].textContent?.trim())).toEqual(rows.map((r) => r.name));
+  });
+
+  it('[EP00-TBR-004-CA2] a status column with a value outside the list shows «—» without throwing, and the other rows still render', () => {
+    const rows = makeRows(3);
+    rows[1].status = 'ARCHIVED_SYNTHETIC';
+    let el!: HTMLElement;
+    expect(() => (el = render({ rows }).el)).not.toThrow();
+    expect(dataRows(el)).toHaveLength(3);
+    expect(dataRows(el).map((r) => cellsOf(r)[5].textContent?.trim())).toEqual(['Vigente', DASH, 'Vigente']);
+    expect(cellsOf(dataRows(el)[1])[5].textContent).not.toContain('ARCHIVED_SYNTHETIC');
+  });
+});
+
+describe('[EP00-TBR-004-CA2] TbColumn type is a closed union (H4)', () => {
+  it('[EP00-TBR-004-CA2] a misspelled column type does not compile', () => {
+    const misspelled: TbColumn<Row> = {
+      id: 'price',
+      header: 'Precio',
+      // @ts-expect-error H4: «mony» is not a column type; with an open string type it would compile and show the raw number.
+      type: 'mony',
+      value: (r: Row) => r.price,
+    };
+    expect(misspelled.id).toBe('price');
+  });
+});
+
+describe('[EP00-TBR-004-CA4] TbDataTable draws the rows it receives (H5)', () => {
+  // Synthetic rows with shuffled prices and names, so any sort or filter would change the order or the count.
+  const shuffled = (n: number): Row[] =>
+    makeRows(n).map((r, i) => ({ ...r, name: `Producto ${(i * 17) % n}`, price: ((i * 31) % n) * 1000 }));
+
+  it('[EP00-TBR-004-CA4] 41 rows with count=120 draw 41 rows in the order received, and the footer says 120', () => {
+    const rows = shuffled(41);
+    const { el } = render({ rows, count: 120 });
+    expect(dataRows(el)).toHaveLength(41);
+    expect(dataRows(el).map((r) => cellsOf(r)[0].textContent?.trim())).toEqual(rows.map((r) => r.name));
+    expect(footerText(el)).toContain('120 productos');
+  });
+
+  it('[EP00-TBR-004-CA4] a sort, active filters and a search term do not sort, filter or page the rows', () => {
+    const rows = shuffled(41);
+    const { el } = render({
+      rows,
+      count: 120,
+      sort: { columnId: 'price', direction: 'desc' },
+      filtersActive: true,
+      searchTerm: 'Producto 3',
+    });
+    expect(dataRows(el)).toHaveLength(41);
+    expect(dataRows(el).map((r) => cellsOf(r)[0].textContent?.trim())).toEqual(rows.map((r) => r.name));
+  });
+});
+
+// [EP00-TBR-004-CA1] H1: fidelity with the v6 anatomy (src/ui/docs/components.css and the c-DataTable section of the
+// reference). jsdom does not lay out, so these tests read the CSS the pieces declare (their styles: metadata) and resolve
+// it for an element with a small cascade: inline style first, then the matching rule with the highest specificity.
+interface CssRule {
+  readonly selectors: readonly string[];
+  readonly decls: ReadonlyMap<string, string>;
+}
+
+function componentRules(...types: unknown[]): CssRule[] {
+  const css = types
+    .flatMap((t) => (t as Record<string, { styles?: readonly string[] } | undefined>)['ɵcmp']?.styles ?? [])
+    .join('\n')
+    .replace(/\/\*[\s\S]*?\*\//g, '');
+  const rules: CssRule[] = [];
+  let i = 0;
+  while (i < css.length) {
+    const open = css.indexOf('{', i);
+    if (open < 0) break;
+    const prelude = css.slice(i, open).trim();
+    if (prelude.startsWith('@')) {
+      // Drop @media and @keyframes blocks: only the base rules count.
+      let depth = 1;
+      let j = open + 1;
+      while (j < css.length && depth > 0) {
+        if (css[j] === '{') depth++;
+        else if (css[j] === '}') depth--;
+        j++;
+      }
+      i = j;
+      continue;
+    }
+    const close = css.indexOf('}', open);
+    const decls = new Map<string, string>();
+    for (const decl of css.slice(open + 1, close).split(';')) {
+      const at = decl.indexOf(':');
+      if (at > 0) decls.set(decl.slice(0, at).trim().toLowerCase(), decl.slice(at + 1).trim());
+    }
+    rules.push({ selectors: prelude.split(',').map((s) => s.trim()), decls });
+    i = close + 1;
+  }
+  return rules;
+}
+
+function specificity(selector: string): number {
+  const ids = (selector.match(/#[\w-]+/g) ?? []).length;
+  const classes = (selector.match(/\.[\w-]+|\[[^\]]*\]|:(?!:)[\w-]+/g) ?? []).length;
+  const types = (selector.match(/(?:^|[\s>+~])[a-z][\w-]*/gi) ?? []).length;
+  return ids * 10_000 + classes * 100 + types;
+}
+
+// The compiled styles carry a %NS% placeholder inside custom property names (var(--%NS%spacing-3)); it is removed.
+const normalize = (v: string) =>
+  v.replace(/%ns%/gi, '').replace(/\s+/g, ' ').replace(/\s*\/\s*/g, '/').trim().toLowerCase();
+
+function declared(el: Element, prop: string, rules: readonly CssRule[]): string | null {
+  const inline = (el as HTMLElement).style?.getPropertyValue(prop);
+  if (inline) return normalize(inline);
+  let best: { spec: number; value: string } | null = null;
+  for (const rule of rules) {
+    const value = rule.decls.get(prop);
+    if (value === undefined) continue;
+    for (const selector of rule.selectors) {
+      let hit = false;
+      try {
+        hit = el.matches(selector);
+      } catch {
+        hit = false; // pseudo-elements and selectors jsdom cannot match
+      }
+      const spec = specificity(selector);
+      if (hit && (!best || spec >= best.spec)) best = { spec, value };
+    }
+  }
+  return best ? normalize(best.value) : null;
+}
+
+@Component({
+  selector: 'tb-data-table-actions-host',
+  imports: [TbDataTable],
+  template: `
+    <tb-data-table
+      title="Productos"
+      [columns]="columns"
+      [rows]="rows"
+      [rowKey]="rowKey"
+      state="ready"
+      searchLabel="Buscar productos"
+      [itemLabel]="itemLabel"
+      loadingLabel="Cargando productos"
+      [texts]="texts"
+    >
+      <button tbActions type="button" id="caller-action">Nuevo producto</button>
+    </tb-data-table>
+  `,
+})
+class ActionsHost {
+  columns = COLUMNS;
+  rows = makeRows(2);
+  rowKey = (r: Row) => r.id;
+  itemLabel = { one: 'producto', other: 'productos' };
+  texts = TEXTS;
+}
+
+describe('[EP00-TBR-004-CA1] TbDataTable follows the v6 anatomy (H1)', () => {
+  it('[EP00-TBR-004-CA1] the card header is .tb-sec with an h2 title and the caller actions in .tools (not .tb-dt-head with h3)', () => {
+    const fixture = TestBed.createComponent(ActionsHost);
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    const sec = el.querySelector('.tb-sec') as HTMLElement | null;
+    expect(sec).not.toBeNull();
+    expect(sec!.querySelector('h2')?.textContent?.trim()).toBe('Productos');
+    expect(sec!.querySelector('.tools #caller-action')).not.toBeNull();
+    expect(el.querySelector('.tb-dt-head')).toBeNull();
+    expect(el.querySelector('h3')).toBeNull();
+  });
+
+  it('[EP00-TBR-004-CA1] .tb-sec declares the v6 padding, gap and border, and its h2 the v6 font', () => {
+    const { el } = render({ rows: makeRows(2) });
+    const rules = componentRules(TbIcon, TbDataTable);
+    const sec = el.querySelector('.tb-sec') as HTMLElement | null;
+    expect(sec).not.toBeNull();
+    expect(declared(sec!, 'padding', rules)).toBe('var(--spacing-3) var(--spacing-4)');
+    expect(declared(sec!, 'gap', rules)).toBe('var(--spacing-3)');
+    expect(declared(sec!, 'justify-content', rules)).toBe('space-between');
+    expect(declared(sec!, 'border-bottom', rules)).toBe('1px solid var(--color-line)');
+    expect(declared(sec!.querySelector('h2')!, 'font', rules)).toBe('600 14px/20px var(--font-sans)');
+  });
+
+  it('[EP00-TBR-004-CA1] the icon of a sortable column header measures 12 px (.th .tb-ico)', () => {
+    const { el } = render({ rows: makeRows(2) });
+    const rules = componentRules(TbIcon, TbDataTable);
+    const icon = headerControl(header(el, 'Precio')).querySelector('.tb-ico');
+    expect(icon).not.toBeNull();
+    expect(declared(icon!, 'width', rules)).toBe('12px');
+    expect(declared(icon!, 'height', rules)).toBe('12px');
+  });
+
+  it('[EP00-TBR-004-CA1] the footer declares the v6 padding (10px space-4) and gap (space-4)', () => {
+    const { el } = render({ rows: makeRows(41), note: 'Precios sin impuestos' });
+    const rules = componentRules(TbIcon, TbDataTable);
+    const count = Array.from(el.querySelectorAll('span')).find((s) => s.textContent?.trim() === '41 productos');
+    expect(count).toBeDefined();
+    const foot = count!.parentElement as HTMLElement;
+    expect(declared(foot, 'padding', rules)).toBe('10px var(--spacing-4)');
+    expect(declared(foot, 'gap', rules)).toBe('var(--spacing-4)');
+    expect(declared(foot, 'justify-content', rules)).toBe('space-between');
+  });
+
+  it('[EP00-TBR-004-CA1] the cascade helper resolves inline style and specificity (self-check)', () => {
+    const rules = componentRules(TbIcon);
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('class', 'tb-ico s14');
+    expect(declared(svg, 'width', rules)).toBe('14px');
+    svg.setAttribute('class', 'tb-ico');
+    expect(declared(svg, 'width', rules)).toBe('16px');
+    const div = document.createElement('div');
+    div.style.setProperty('width', '70%');
+    expect(declared(div, 'width', rules)).toBe('70%');
+    expect(normalize('var(--%NS%spacing-3)  var(--%NS%spacing-4)')).toBe('var(--spacing-3) var(--spacing-4)');
+  });
+});
 
 @Component({
   selector: 'tb-data-table-cell-host',

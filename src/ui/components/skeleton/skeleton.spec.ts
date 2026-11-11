@@ -67,6 +67,113 @@ for (const theme of THEMES) {
   });
 }
 
+// [EP00-TBR-004-CA1] H1: fidelity with the v6 anatomy of c-Skeleton (src/ui/docs/components.css .tb-skel and the
+// «Tabla» demo of the reference: thumbnail 36 px with radius-md, first line at 70 %, 55 % and 80 %, chip of 72 px).
+// jsdom does not lay out, so these tests read the CSS the piece declares (its styles: metadata) and resolve it for an
+// element with a small cascade: inline style first, then the matching rule with the highest specificity.
+interface CssRule {
+  readonly selectors: readonly string[];
+  readonly decls: ReadonlyMap<string, string>;
+}
+
+function componentRules(...types: unknown[]): CssRule[] {
+  const css = types
+    .flatMap((t) => (t as Record<string, { styles?: readonly string[] } | undefined>)['ɵcmp']?.styles ?? [])
+    .join('\n')
+    .replace(/\/\*[\s\S]*?\*\//g, '');
+  const rules: CssRule[] = [];
+  let i = 0;
+  while (i < css.length) {
+    const open = css.indexOf('{', i);
+    if (open < 0) break;
+    const prelude = css.slice(i, open).trim();
+    if (prelude.startsWith('@')) {
+      // Drop @media and @keyframes blocks: only the base rules count.
+      let depth = 1;
+      let j = open + 1;
+      while (j < css.length && depth > 0) {
+        if (css[j] === '{') depth++;
+        else if (css[j] === '}') depth--;
+        j++;
+      }
+      i = j;
+      continue;
+    }
+    const close = css.indexOf('}', open);
+    const decls = new Map<string, string>();
+    for (const decl of css.slice(open + 1, close).split(';')) {
+      const at = decl.indexOf(':');
+      if (at > 0) decls.set(decl.slice(0, at).trim().toLowerCase(), decl.slice(at + 1).trim());
+    }
+    rules.push({ selectors: prelude.split(',').map((s) => s.trim()), decls });
+    i = close + 1;
+  }
+  return rules;
+}
+
+function specificity(selector: string): number {
+  const ids = (selector.match(/#[\w-]+/g) ?? []).length;
+  const classes = (selector.match(/\.[\w-]+|\[[^\]]*\]|:(?!:)[\w-]+/g) ?? []).length;
+  const types = (selector.match(/(?:^|[\s>+~])[a-z][\w-]*/gi) ?? []).length;
+  return ids * 10_000 + classes * 100 + types;
+}
+
+// The compiled styles carry a %NS% placeholder inside custom property names (var(--%NS%radius-sm)); it is removed.
+const normalize = (v: string) => v.replace(/%ns%/gi, '').replace(/\s+/g, ' ').trim().toLowerCase();
+
+function declared(el: Element, prop: string, rules: readonly CssRule[]): string | null {
+  const inline = (el as HTMLElement).style?.getPropertyValue(prop);
+  if (inline) return normalize(inline);
+  let best: { spec: number; value: string } | null = null;
+  for (const rule of rules) {
+    const value = rule.decls.get(prop);
+    if (value === undefined) continue;
+    for (const selector of rule.selectors) {
+      let hit = false;
+      try {
+        hit = el.matches(selector);
+      } catch {
+        hit = false; // pseudo-elements and selectors jsdom cannot match
+      }
+      const spec = specificity(selector);
+      if (hit && (!best || spec >= best.spec)) best = { spec, value };
+    }
+  }
+  return best ? normalize(best.value) : null;
+}
+
+describe('[EP00-TBR-004-CA1] TbSkeleton follows the v6 anatomy (H1)', () => {
+  const rowsOf = (el: HTMLElement) => Array.from(el.querySelectorAll<HTMLElement>('.tb-skel-rows > *'));
+  const thumbOf = (row: HTMLElement) => row.children[0] as HTMLElement;
+  const firstLineOf = (row: HTMLElement) => row.querySelector('.tb-skel.line') as HTMLElement;
+  const chipOf = (row: HTMLElement) => row.querySelector('.tb-skel.chip') as HTMLElement;
+
+  it('[EP00-TBR-004-CA1] each row starts with a 36 px thumbnail with radius-md', () => {
+    const rules = componentRules(TbSkeleton);
+    for (const row of rowsOf(render({ shape: 'rows' }))) {
+      const thumb = thumbOf(row);
+      expect(thumb.classList.contains('tb-skel')).toBe(true);
+      expect(declared(thumb, 'width', rules)).toBe('36px');
+      expect(declared(thumb, 'height', rules)).toBe('36px');
+      expect(declared(thumb, 'border-radius', rules)).toBe('var(--radius-md)');
+    }
+  });
+
+  it('[EP00-TBR-004-CA1] the chip of a row measures 72 px, like the chip shape', () => {
+    const rules = componentRules(TbSkeleton);
+    for (const row of rowsOf(render({ shape: 'rows' }))) expect(declared(chipOf(row), 'width', rules)).toBe('72px');
+    const chip = render({ shape: 'chip' }).querySelector('.tb-skel.chip') as HTMLElement;
+    expect(declared(chip, 'width', rules)).toBe('72px');
+    expect(declared(chip, 'height', rules)).toBe('22px');
+  });
+
+  it('[EP00-TBR-004-CA1] the first line of the first three rows varies its width: 70 %, 55 % and 80 %', () => {
+    const rules = componentRules(TbSkeleton);
+    const widths = rowsOf(render({ shape: 'rows' })).map((row) => declared(firstLineOf(row), 'width', rules));
+    expect(widths.slice(0, 3)).toEqual(['70%', '55%', '80%']);
+  });
+});
+
 // [EP00-TBR-004-CA4] createLoadingPhase (design docs/diseno/EP00-TBR-004.md §3 states and §6 edge cases 1-3; AJ-7).
 // Black box over the phase signal with Vitest fake timers: nothing before 300 ms, the skeleton from 300 ms to 10 s,
 // the error at 10 s (onTimeout once), and a single phase at a time so old rows never mix with the skeleton.
