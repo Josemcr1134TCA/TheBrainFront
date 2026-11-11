@@ -217,8 +217,36 @@ protected readonly texts: TbTableTexts = {
 <!-- El pie de paginación de la página va aquí, fuera de la tabla. -->
 ```
 
+### Ampliación para el catálogo (D-052)
+
+- `searchable` (por defecto `true`): con `false` no hay barra de filtros ni buscador, y `searchLabel` no hace falta.
+- Pie propio: el contenido con el atributo `tbFooter` va dentro del pie y reemplaza el conteo y la nota de la tabla (el conteo sale una sola vez). El pie solo aparece con filas en pantalla.
+- `texts[variante]` acepta `actionVariant` (`default` o `primary`) y `secondaryActionLabel` (acción `ghost` después de la primaria). La secundaria emite `secondaryAction` con la variante; no se pinta sin acción primaria.
+
+```html
+<tb-data-table …>
+  <tb-cursor-pager tbFooter [page]="page()" [hasNext]="hasNext()" [count]="rows().length" [itemLabel]="label" (first)="toFirst()" (previous)="toPrevious()" (next)="toNext()" />
+</tb-data-table>
+```
+
+## CursorPager
+
+`<tb-cursor-pager>` (PZ-23, D-053). Paginador para listas por cursor opaco: muestra «Página n · N productos» y no tiene total ni salto de página.
+
+| Entrada | Valores |
+|---|---|
+| `page` | número de página (menor que 1 se trata como 1) |
+| `hasNext` | si hay más; sin él, «Siguiente» queda deshabilitado con el título «No hay más productos» |
+| `count`, `itemLabel` | elementos de esta página y `{ one, other }` |
+
+Salidas: `first`, `previous` y `next`. «Primera página» y «Anterior» (`ghost`, sin icono) aparecen desde la página 2; «Siguiente» lleva `chevron-right` y `aria-label` «Página siguiente». El `nav` se llama «Paginación». No conoce los cursores: quien lo usa los guarda.
+
+## EmptyState: acción secundaria (D-052)
+
+`actionVariant` (`default` o `primary`) y `secondaryActionLabel` con la salida `secondaryAction()`. La secundaria es `ghost`, va después de la primaria y no se pinta sin ella.
+
 ## Fuera de esta versión
 
-- DataTable: menú de columnas, CSV, ampliar columnas, columnas fijas, densidad, selección y paginación (PQ-2).
+- DataTable: menú de columnas, CSV, ampliar columnas, columnas fijas, densidad y selección.
 - Chip, Tooltip, botón de solo icono y atajo de teclado (PQ-3 y PQ-4).
 - `Icon` es interno (`components/icon/`): no se exporta ni se usa desde `src/app/`.

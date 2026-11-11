@@ -15,7 +15,7 @@ export type { TbBannerLevel } from './components/banner/banner';
 export { TbSkeleton } from './components/skeleton/skeleton';
 export type { TbSkeletonShape } from './components/skeleton/skeleton';
 export { TbEmptyState } from './components/empty-state/empty-state';
-export type { TbEmptyVariant } from './components/empty-state/empty-state';
+export type { TbEmptyVariant, TbEmptyActionVariant } from './components/empty-state/empty-state';
 export { TbFilterSelect } from './components/filter-select/filter-select';
 export type { TbFilterOption, TbItemLabel } from './components/filter-select/filter-select';
 export { TbTabs } from './components/tabs/tabs';
@@ -30,3 +30,4 @@ export type {
   TbTableTexts,
   TbCellContext,
 } from './components/data-table/data-table';
+export { TbCursorPager } from './components/cursor-pager/cursor-pager';
