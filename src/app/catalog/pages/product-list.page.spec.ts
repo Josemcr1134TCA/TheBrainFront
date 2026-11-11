@@ -781,3 +781,152 @@ describe('[EP00-TBR-003-CA3] catalog screen: loading (fake timers)', () => {
     expectPage(el, 2, 20);
   });
 });
+
+// ---------- T7 (trazabilidad): gaps found after reading the code ----------
+
+// Approved widths (docs/ui/EP00-TBR-003/index.html, .proto-tabla --cols) and fixed columns (stick1 stick2, --stick2).
+const APPROVED_TRACKS = '104px 200px 140px 130px 160px 130px 130px 160px 140px 150px';
+
+describe('[EP00-TBR-003-CA1] catalog screen: layout of the approved table', () => {
+  it('[EP00-TBR-003-CA1] the header and every row use the approved column widths, in the approved order', async () => {
+    const { el } = await open();
+    const head = el.querySelector<HTMLElement>('.tb-head-row');
+
+    expect(head).not.toBeNull();
+    expect(head!.style.getPropertyValue('--cols').trim()).toBe(APPROVED_TRACKS);
+    for (const row of rows(el)) expect(row.style.getPropertyValue('--cols').trim()).toBe(APPROVED_TRACKS);
+  });
+
+  it('[EP00-TBR-003-CA1] «Código» and «Nombre» are fixed (stick1 stick2) and the second one starts after the 104px of the first plus the gap', async () => {
+    const { el } = await open();
+    const scroll = el.querySelector<HTMLElement>('.tb-hscroll');
+
+    expect(scroll).not.toBeNull();
+    expect(scroll!.classList.contains('stick1')).toBe(true);
+    expect(scroll!.classList.contains('stick2')).toBe(true);
+    expect(scroll!.style.getPropertyValue('--stick2').replace(/\s+/g, '')).toBe('calc(104px+var(--spacing-3))');
+  });
+
+  it('[EP00-TBR-003-CA1] the list uses the dense rows of the approved UI (tb-list dense)', async () => {
+    const { el } = await open();
+
+    expect(el.querySelector('.tb-list')?.classList.contains('dense')).toBe(true);
+  });
+
+  it('[EP00-TBR-003-CA1] the screen says «Código», never «SKU» (G-0004), in the visible text or in labels', async () => {
+    const { el } = await open();
+    const labelled = Array.from(el.querySelectorAll('[aria-label], [title]'))
+      .map((n) => `${n.getAttribute('aria-label') ?? ''} ${n.getAttribute('title') ?? ''}`)
+      .join(' ');
+
+    expect(headers(el)[0]).toBe('Código');
+    expect(flat(el)).not.toMatch(/sku/i);
+    expect(labelled).not.toMatch(/sku/i);
+  });
+});
+
+describe('[EP00-TBR-003-CA2] catalog screen: load timeout (10 s) and reset of the previous failure', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  async function tick(fixture: ComponentFixture<unknown>, ms: number) {
+    fixture.detectChanges();
+    await vi.advanceTimersByTimeAsync(ms);
+    fixture.detectChanges();
+  }
+
+  it('[EP00-TBR-003-CA2] a first load that passes 10 s shows «No pudimos cargar el catálogo» with «Reintentar» primary and no list', async () => {
+    const port = new ScriptedProductPort(() => new Subject<Page<Product>>());
+    const { fixture, el } = mount({ port });
+
+    await tick(fixture, 9_999);
+    expect(stateBox(el)).toBeNull();
+
+    await tick(fixture, 1);
+    const box = stateBox(el);
+    expect(box, 'a los 10 s debe mostrar el error').not.toBeNull();
+    expect(flat(box)).toContain(BY_CODE.UNAVAILABLE.heading);
+    expect(labels(box)).toEqual([RETRY]);
+    expect(lookOf(button(box, RETRY))).toBe('primary');
+    expect(roleOf(box!)).toBe('alert');
+    expectNoList(el);
+  });
+
+  it('[EP00-TBR-003-CA2] «Reintentar» after the 10 s timeout asks the port again and the answer replaces the error', async () => {
+    const hung = new Subject<Page<Product>>();
+    const port = new ScriptedProductPort((request, call) => (call === 1 ? hung : threePages(request)));
+    const { fixture, el } = mount({ port });
+    await tick(fixture, 10_000);
+    expect(stateBox(el)).not.toBeNull();
+
+    button(stateBox(el), RETRY)!.click();
+    await tick(fixture, 0);
+
+    expect(port.requests).toHaveLength(2);
+    expect(cursorOf(port.requests[1])).toBeNull();
+    expect(stateBox(el)).toBeNull();
+    expect(shownCodes(el)).toEqual(codesOf(PAGE_1));
+    expectPage(el, 1, 20);
+  });
+
+  it('[EP00-TBR-003-CA2] «Reintentar» after the 10 s timeout shows loading again (the error does not stay while the port answers)', async () => {
+    const port = new ScriptedProductPort(() => new Subject<Page<Product>>());
+    const { fixture, el } = mount({ port });
+    await tick(fixture, 10_000);
+    expect(stateBox(el)).not.toBeNull();
+
+    button(stateBox(el), RETRY)!.click();
+    await tick(fixture, 0);
+
+    expect(port.requests).toHaveLength(2);
+    expect(stateBox(el), 'tras «Reintentar» no debe quedar el error anterior').toBeNull();
+    expect(el.querySelector('[aria-busy="true"]')).not.toBeNull();
+  });
+
+  it('[EP00-TBR-003-CA2] each request clears the previous failure: INVALID_CURSOR, then a first page that passes 10 s shows UNAVAILABLE texts', async () => {
+    const hung = new Subject<Page<Product>>();
+    const port = new ScriptedProductPort((request, call) => {
+      if (call === 1) return of(PAGE_1);
+      if (cursorOf(request) === CURSOR_2) return throwError(() => failureOf('INVALID_CURSOR', 'corr-syn-0009'));
+      return hung;
+    });
+    const { fixture, el } = mount({ port });
+    await tick(fixture, 0);
+    pagerButton(el, NEXT)!.click();
+    await tick(fixture, 0);
+    expect(flat(stateBox(el))).toContain(BY_CODE.INVALID_CURSOR.heading);
+
+    button(stateBox(el), GO_FIRST)!.click();
+    await tick(fixture, 10_000);
+
+    const box = stateBox(el);
+    expect(box).not.toBeNull();
+    expect(flat(box)).toContain(BY_CODE.UNAVAILABLE.heading);
+    expect(flat(box)).not.toContain(BY_CODE.INVALID_CURSOR.heading);
+    expect(flat(box)).not.toContain('corr-syn-0009');
+    expect(labels(box)).toEqual([RETRY]);
+
+    button(box, RETRY)!.click();
+    await tick(fixture, 0);
+    expect(cursorOf(port.requests[port.requests.length - 1])).toBeNull();
+  });
+
+  it('[EP00-TBR-003-CA2] each request clears the previous failure: VALIDATION «Reintentar» that passes 10 s loses the secondary action and the reference', async () => {
+    const hung = new Subject<Page<Product>>();
+    const port = new ScriptedProductPort((_request, call) =>
+      call === 1 ? throwError(() => failureOf('VALIDATION', 'corr-syn-0010')) : hung,
+    );
+    const { fixture, el } = mount({ port });
+    await tick(fixture, 0);
+    expect(labels(stateBox(el))).toEqual([RETRY, GO_FIRST]);
+
+    button(stateBox(el), RETRY)!.click();
+    await tick(fixture, 10_000);
+
+    const box = stateBox(el);
+    expect(box).not.toBeNull();
+    expect(flat(box)).toContain(BY_CODE.UNAVAILABLE.heading);
+    expect(labels(box)).toEqual([RETRY]);
+    expect(flat(box)).not.toContain('corr-syn-0010');
+  });
+});
