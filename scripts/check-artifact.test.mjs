@@ -18,6 +18,10 @@
 // [EP00-TBR-002-CA3] Round 2 adds tests for the round 1 re-review findings approved by the dev: H-1 (stricter S6 rule),
 // H-2/Q12 (JWT hidden behind a failed candidate), H-3/Q13 (keys glued to another word), Q10 (short sk-ant-) and Q14
 // (exception paths that never match). They are written before the fix, so the positive ones fail on commit 21d254f.
+// [EP00-TBR-002-CA3] Round 3 re-review (after the fix on 0eb5fc9) pins H-4: lines are counted by "\n" only, as grep -n
+// and git count them, and stay exact in every layout, while many findings on many lines stay linear. It adds two N-4
+// controls and pins that a key-shaped run of ~8 MB still fails the review (finding Q18). All of them pass on 0eb5fc9;
+// each one kills a mutant that the suite let live.
 // [EP00-TBR-002-CA1] package.json has typecheck (R1) plus ci:test and artifact:check with the exact text of §8.6.
 // Synthetic secrets are assembled at runtime so no key-like string is committed (RG-4). No real data.
 // Fixtures live under tmp/ (ignored by git) and are removed afterwards.
@@ -910,6 +914,73 @@ describe("[EP00-TBR-002-CA3] round 3 · N-2/Q16: aws-access-key-id does not fire
   });
 });
 
+// ---------------------------------------------------------------------------------------------
+// Round 3 re-review · H-4 (fixed on 0eb5fc9): the line of a finding comes from the positions of "\n" and a binary search.
+// Lines are counted by "\n" only, as grep -n and git count them: CRLF is one break and a lone "\r" is none, as before
+// H-4. Written after the fix; each case kills a mutant of the line count that the suite let live (an off-by-one upper
+// bound, adjacent "\n" skipped, a lone "\r" counted, and the quadratic count that H-4 replaced).
+// ---------------------------------------------------------------------------------------------
+describe("[EP00-TBR-002-CA3] round 3 re-review · H-4: exact line numbers, counted by line feeds, in linear time", () => {
+  const trigger = (id) => (id === "private-key-block" ? pemBlock("PRIV" + "ATE").split("\n")[0] : TRIGGER_BY_RULE[id]());
+
+  test("[EP00-TBR-002-CA3] H-4: CRLF, a lone CR, no final newline, first and last line, blank lines, several matches on one line, rules out of order and an empty file", () => {
+    const scanArtifact = exported("scanArtifact");
+    const list = exported("loadPatternList")(LIST);
+    const ids = ["vercel-token-env", "github-token", "postgres-url-with-password", "supabase-secret-key", "aws-access-key-id", "service-role-jwt", "private-key-block"];
+    const [vt, gh, pg, sb, aws, sr, pk] = ids.map(trigger);
+    // path -> [content, expected "line|rule" of that file]
+    const CASES = {
+      "browser/lines/crlf.txt": [`one\r\ntwo\r\n${pg}\r\n${vt}\r\n`, ["3|postgres-url-with-password", "4|vercel-token-env"]],
+      "browser/lines/lone-cr.txt": [`one\rtwo\r${pg}\r${vt}\n${sb}\rx`, ["1|postgres-url-with-password", "1|vercel-token-env", "2|supabase-secret-key"]],
+      "browser/lines/no-final-newline.txt": [`one\ntwo\n${vt}`, ["3|vercel-token-env"]],
+      "browser/lines/first-and-only.txt": [gh, ["1|github-token"]],
+      "browser/lines/blank-lines.txt": [`\n\n${vt}\n\n\n${vt}\n`, ["3|vercel-token-env", "6|vercel-token-env"]],
+      "browser/lines/several-per-line.txt": [`${vt} ${vt} ${gh} ${vt}\n${gh} ${vt}`, ["1|vercel-token-env", "1|github-token", "2|github-token", "2|vercel-token-env"]],
+      "browser/lines/out-of-order.txt": [
+        [gh, vt, `${sr} ${gh}`, "", `${vt} ${sr} ${aws}`, `${pk} ${sb}`].join("\n"),
+        ["1|github-token", "2|vercel-token-env", "3|service-role-jwt", "3|github-token", "5|vercel-token-env", "5|service-role-jwt", "5|aws-access-key-id", "6|private-key-block", "6|supabase-secret-key"],
+      ],
+      "browser/lines/lf-cr.txt": [`a\n\r${vt}\n\r\n${vt}`, ["2|vercel-token-env", "4|vercel-token-env"]],
+      "browser/lines/empty.txt": ["", []],
+    };
+    const files = Object.fromEntries(Object.entries(CASES).map(([path, [content]]) => [path, content]));
+    const got = scanArtifact(makeArtifact(files), list).map((f) => `${f.path}:${f.line}|${f.rule}`).sort();
+    const want = Object.entries(CASES).flatMap(([path, [, lines]]) => lines.map((l) => `${path}:${l}`)).sort();
+    assert.deepEqual(got, want, `las líneas se cuentan por «\\n» y deben ser exactas: ${JSON.stringify(got)}`);
+  });
+
+  // Every finding used to cost a count of all the lines before it: 8cc6fac took ~1.2 s for 10 000 findings on 10 000
+  // lines and grows with the square (about a minute for the case below). Until now the suite only had findings on one line.
+  test("[EP00-TBR-002-CA3] H-4: ~2 MB with one finding on each of its 64 000 lines reports every line, exact, in under 2 s", () => {
+    const path = "browser/chunk-LINES.js";
+    const ids = ["vercel-token-env", "supabase-service-role-env", "github-token", "aws-access-key-id", "slack-token"];
+    const triggers = ids.map(trigger);
+    const n = 64_000;
+    const body = Array.from({ length: n }, (_, i) => `k${i % ids.length}="${triggers[i % ids.length]}";`).join("\n");
+    assert.ok(body.length >= 1_900_000 && body.length <= 2_200_000, `autocomprobación: el archivo mide ${body.length} caracteres; deben ser unos 2 MB`);
+    const { ms, findings } = timedScan(makeArtifact({ [path]: `${body}\n` }), "one finding per line", R3_KILL_MS);
+    const got = findings.map((f) => `${f.path}:${f.line}|${f.rule}`).sort();
+    const want = Array.from({ length: n }, (_, i) => `${path}:${i + 1}|${ids[i % ids.length]}`).sort();
+    const first = want.findIndex((w, i) => got[i] !== w);
+    assert.equal(first, -1, `cada línea debe dar su hallazgo con su número exacto; primera diferencia: se esperaba ${want[first]} y llegó ${got[first]}`);
+    assert.equal(got.length, n, `se esperaban ${n} hallazgos y llegaron ${got.length}`);
+    assert.ok(ms < HOSTILE_LIMIT_MS, `la revisión de ${n} líneas con un hallazgo cada una tardó ${Math.round(ms)} ms; el límite es ${HOSTILE_LIMIT_MS} ms`);
+  });
+});
+
+// Round 3 re-review · finding Q18 (low, open since d46985c): a run of about 5.6 M characters or more right after a key
+// prefix overflows the regex backtracking stack of V8 in the rules with an open quantifier ({20,}, {32,}, (…)*), and the
+// script dies with a RangeError trace instead of a finding. It still exits 1, so the artifact is never uploaded. This
+// test pins only that it fails closed; any fix (bounded quantifiers, or a finding per failed rule) keeps it green.
+describe("[EP00-TBR-002-CA3] round 3 re-review · Q18: a key-shaped run of several MB fails closed", () => {
+  test("[EP00-TBR-002-CA3] Q18: a ~8 MB key-shaped run (sb_secret_ and 8 M characters) still fails the review and is never ready to upload", () => {
+    const r = scan(makeArtifact({ "browser/chunk-LONGRUN.js": `/* synthetic */\nconst k="${"sb_" + "secret_"}${"a".repeat(8_000_000)}";\n` }));
+    assert.equal(r.status, 1, `una corrida con forma de llave debe hacer fallar la revisión\n${r.output.slice(0, 2_000)}`);
+    assert.doesNotMatch(r.output, /listo para subir/, `un artefacto con una llave nunca está listo para subir\n${r.output.slice(0, 2_000)}`);
+    assert.ok(!r.output.includes("a".repeat(MAX_SHOWN + 1)), "la salida no puede mostrar el valor");
+  });
+});
+
 describe("[EP00-TBR-002-CA3] check-artifact fails closed", () => {
   const MISSING_CASES = [
     ["a folder that does not exist", () => join(makeDir(), "does-not-exist")],
@@ -1242,9 +1313,11 @@ describe("[EP00-TBR-002-CA3] validatePatternList rejects invalid lists", () => {
   }
   // Controls: upper case stays allowed (paths are case sensitive, that is not a form error), and a folder or name that
   // only starts with a dot, or a top folder that only starts with "dist", is a real path.
-  const N4_ACCEPTED = ["BROWSER/vendor-*.js", "browser/.well-known/abc-*.js", "distro/vendor-*.js"];
+  // Round 3 re-review: a first segment that only starts with a dot, and a dist/ folder below the root (only a leading
+  // "dist/" is the mistake). They kill two mutants the suite let live: startsWith(".") and includes("dist/").
+  const N4_ACCEPTED = ["BROWSER/vendor-*.js", "browser/.well-known/abc-*.js", "distro/vendor-*.js", ".well-known/abc-*.js", "browser/assets/dist/lib-*.js"];
   for (const path of N4_ACCEPTED) {
-    test(`[EP00-TBR-002-CA3] N-4 control: accepts «${path}» (upper case, or segments that only start with a dot or with dist)`, () => {
+    test(`[EP00-TBR-002-CA3] N-4 control: accepts «${path}» (upper case, segments that only start with a dot or with dist, or dist/ below the root)`, () => {
       const validatePatternList = exported("validatePatternList");
       assert.deepEqual(validatePatternList({ ...validList(), exceptions: [exception({ path })] }), [], `la excepción «${path}» tiene buena forma y debe aceptarse`);
     });
