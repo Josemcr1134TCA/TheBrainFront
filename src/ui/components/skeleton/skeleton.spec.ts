@@ -167,10 +167,15 @@ describe('[EP00-TBR-004-CA1] TbSkeleton follows the v6 anatomy (H1)', () => {
     expect(declared(chip, 'height', rules)).toBe('22px');
   });
 
-  it('[EP00-TBR-004-CA1] the first line of the first three rows varies its width: 70 %, 55 % and 80 %', () => {
+  // H8: the «Tabla» demo of the v6 (reference.src.html, previews) has exactly 4 rows, at 70, 55, 80 and 62 %. The 90 %
+  // and 75 % of the reference belong to the «Ficha» demo (two lines of a card), not to table rows. Neither the v6 nor the
+  // design (§3.8) says the width of rows 5 and 6, so they are not fixed here (open question for the PO).
+  it('[EP00-TBR-004-CA1] the first line of the first four rows varies its width as in the v6 demo: 70 %, 55 %, 80 % and 62 %', () => {
     const rules = componentRules(TbSkeleton);
-    const widths = rowsOf(render({ shape: 'rows' })).map((row) => declared(firstLineOf(row), 'width', rules));
-    expect(widths.slice(0, 3)).toEqual(['70%', '55%', '80%']);
+    for (const rows of [4, 5, 6]) {
+      const widths = rowsOf(render({ shape: 'rows', rows })).map((row) => declared(firstLineOf(row), 'width', rules));
+      expect(widths.slice(0, 4)).toEqual(['70%', '55%', '80%', '62%']);
+    }
   });
 });
 
