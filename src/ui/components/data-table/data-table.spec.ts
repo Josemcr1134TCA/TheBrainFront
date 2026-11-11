@@ -1662,3 +1662,95 @@ describe('[EP00-TBR-003-CA2] G6 TbDataTable forwards several paragraphs and the 
     expect(emptyState(el)!.querySelector('.tb-num')).toBeNull();
   });
 });
+
+// [EP00-TBR-003-CA1] Mono columns (approved by Elkin, option a): TbColumn gains mono?: boolean. With true, the cells of
+// that column (not its header) carry the kit class tb-num (font-family var(--font-mono), tabular-nums); the value is
+// shown as it comes, as text and without number format. Without mono the DOM is the 004 one. The .tb-num rule must be
+// declared by tb-data-table itself, not borrowed from another component. Synthetic codes only.
+// The columns are cast so this file still compiles before mono exists in TbColumn: the tests then fail on the DOM.
+interface CodeRow {
+  id: string;
+  code: string | null;
+  name: string;
+}
+
+const CODE_ROWS: CodeRow[] = [
+  { id: 'c-1', code: '0001234567890', name: 'Producto sintético 1' },
+  { id: 'c-2', code: 'SYN-000042', name: 'Producto sintético 2' },
+];
+
+const codeColumns = (mono?: boolean): TbColumn<CodeRow>[] => [
+  {
+    id: 'code',
+    header: 'Código',
+    type: 'text',
+    value: (r: CodeRow) => r.code,
+    ...(mono === undefined ? {} : { mono }),
+  } as TbColumn<CodeRow>,
+  { id: 'name', header: 'Nombre', type: 'text', value: (r: CodeRow) => r.name },
+];
+
+const renderCodes = (mono?: boolean, rows: CodeRow[] = CODE_ROWS) =>
+  render({ rows, columns: codeColumns(mono), rowKey: (r: CodeRow) => r.id });
+
+// The tb-num element of a cell: the cell itself or an element inside it.
+const monoOf = (cell: HTMLElement) =>
+  cell.classList.contains('tb-num') ? cell : (cell.querySelector<HTMLElement>('.tb-num') ?? null);
+
+describe('[EP00-TBR-003-CA1] TbDataTable mono columns (tb-num)', () => {
+  it('[EP00-TBR-003-CA1] mono: true puts tb-num on every cell of that column', () => {
+    const { el } = renderCodes(true);
+    const rows = dataRows(el);
+    expect(rows).toHaveLength(2);
+    for (const row of rows) expect(monoOf(cellsOf(row)[0])).not.toBeNull();
+  });
+
+  it('[EP00-TBR-003-CA1] mono: true does not put tb-num on the header nor on the other columns', () => {
+    const { el } = renderCodes(true);
+    const head = header(el, 'Código');
+    expect(head.classList.contains('tb-num') || !!head.querySelector('.tb-num')).toBe(false);
+    for (const row of dataRows(el)) expect(monoOf(cellsOf(row)[1])).toBeNull();
+  });
+
+  it('[EP00-TBR-003-CA1] a mono cell shows the value as it comes, as text and without number format', () => {
+    const { el } = renderCodes(true);
+    const cells = dataRows(el).map((r) => cellsOf(r)[0]);
+    expect(monoOf(cells[0])?.textContent?.trim()).toBe('0001234567890');
+    expect(cells[0].textContent?.trim()).toBe('0001234567890');
+    expect(cells[1].textContent?.trim()).toBe('SYN-000042');
+    expect(isNum(cells[0])).toBe(false);
+  });
+
+  it('[EP00-TBR-003-CA1] an empty value in a mono column shows «—» without throwing, and the other rows keep tb-num', () => {
+    const rows = [{ ...CODE_ROWS[0], code: null }, CODE_ROWS[1]];
+    let el!: HTMLElement;
+    expect(() => (el = renderCodes(true, rows).el)).not.toThrow();
+    expect(cellsOf(dataRows(el)[0])[0].textContent?.trim()).toBe(DASH);
+    expect(monoOf(cellsOf(dataRows(el)[1])[0])).not.toBeNull();
+  });
+
+  it('[EP00-TBR-003-CA1] tb-data-table declares its own .tb-num rule with the mono font and tabular figures', () => {
+    const { el } = renderCodes(true);
+    const rules = componentRules(TbDataTable);
+    expect(rules.some((r) => r.selectors.some((s) => /\.tb-num\b/.test(s)))).toBe(true);
+    const mono = monoOf(cellsOf(dataRows(el)[0])[0]);
+    expect(mono).not.toBeNull();
+    expect(declared(mono!, 'font-family', rules)).toBe('var(--font-mono)');
+    expect(declared(mono!, 'font-variant-numeric', rules)).toBe('tabular-nums');
+  });
+
+  it('[EP00-TBR-003-CA1] without mono there is no tb-num in the table (004 compatibility)', () => {
+    expect(renderCodes().el.querySelector('.tb-num')).toBeNull();
+    expect(render({ rows: makeRows(3) }).el.querySelector('.tb-num')).toBeNull();
+  });
+
+  it('[EP00-TBR-003-CA1] mono: false paints the same DOM as no mono (004 compatibility)', () => {
+    expect(renderCodes(false).el.innerHTML).toBe(renderCodes().el.innerHTML);
+  });
+
+  it('[EP00-TBR-003-CA1] mono: true only adds tb-num: the text of every cell is the same as without mono', () => {
+    const texts = (host: HTMLElement) =>
+      dataRows(host).map((r) => cellsOf(r).map((c) => c.textContent?.trim()));
+    expect(texts(renderCodes(true).el)).toEqual(texts(renderCodes().el));
+  });
+});

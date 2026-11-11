@@ -14,7 +14,7 @@
 import { after, describe, it, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, rmdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, rmdirSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -590,6 +590,61 @@ describe("[EP00-TBR-014-CA6] module list of .dependency-cruiser.cjs against the 
     assert.deepEqual(repeated, [], `módulos repetidos en .dependency-cruiser.cjs: ${repeated.join(", ")}`);
     const result = compareModules(configured, MODULES);
     assert.ok(result.extra.length === 0 && result.missing.length === 0, mismatchMessage(result));
+  });
+});
+
+// [EP00-TBR-003-CA1] Demo data only in the data/ layer of a module (approved by Elkin, option a): no *.fixture.ts may
+// exist under src/ outside src/app/<module>/data/, with <module> one of the fixed table (MODULES).
+// Static check over the file tree: it returns the misplaced fixtures, relative to root and with forward slashes.
+const FIXTURE_FILE = /\.fixture\.ts$/;
+const FIXTURE_HOME = new RegExp(`^src/app/(${MODULES.join("|")})/data/(.+/)?[^/]+\\.fixture\\.ts$`);
+
+function fixturesUnder(root) {
+  const found = [];
+  const walk = (rel) => {
+    for (const entry of readdirSync(join(root, rel), { withFileTypes: true })) {
+      const path = `${rel}/${entry.name}`;
+      if (entry.isDirectory()) walk(path);
+      else if (FIXTURE_FILE.test(entry.name)) found.push(path);
+    }
+  };
+  walk("src");
+  return found.sort();
+}
+
+const misplacedFixtures = (root) => fixturesUnder(root).filter((path) => !FIXTURE_HOME.test(path));
+
+describe("[EP00-TBR-003-CA1] demo fixtures live only in src/app/<module>/data/", () => {
+  it("[EP00-TBR-003-CA1] the repository has no *.fixture.ts outside src/app/<module>/data/", () => {
+    const misplaced = misplacedFixtures(FRONT);
+    assert.deepEqual(misplaced, [], `fixtures fuera de src/app/<módulo>/data/: ${misplaced.join(", ")}`);
+  });
+
+  it("[EP00-TBR-003-CA1] the walk sees the demo fixture of the catalog where it belongs (control)", () => {
+    const all = fixturesUnder(FRONT);
+    assert.ok(all.includes("src/app/catalog/data/products.fixture.ts"), `no se encontró el fixture del catálogo: ${all.join(", ")}`);
+  });
+
+  it("[EP00-TBR-003-CA1] a fixture placed outside a module data/ folder is reported (synthetic tree under tmp/)", () => {
+    const dir = makeFixture({
+      "src/app/catalog/data/products.fixture.ts": "export const OK = 1;\n",
+      "src/app/catalog/data/demo/nested.fixture.ts": "export const OK = 2;\n",
+      "src/app/catalog/pages/list.fixture.ts": "export const BAD = 1;\n",
+      "src/app/catalog/components/card.fixture.ts": "export const BAD = 2;\n",
+      "src/app/core/data/core.fixture.ts": "export const BAD = 3;\n",
+      "src/app/sales/data/unknown.fixture.ts": "export const BAD = 4;\n",
+      "src/ui/components/data-table/rows.fixture.ts": "export const BAD = 5;\n",
+      "src/demo.fixture.ts": "export const BAD = 6;\n",
+      "src/app/catalog/data/products.adapter.ts": "export const NOT_A_FIXTURE = 1;\n",
+    });
+    assert.deepEqual(misplacedFixtures(dir), [
+      "src/app/catalog/components/card.fixture.ts",
+      "src/app/catalog/pages/list.fixture.ts",
+      "src/app/core/data/core.fixture.ts",
+      "src/app/sales/data/unknown.fixture.ts",
+      "src/demo.fixture.ts",
+      "src/ui/components/data-table/rows.fixture.ts",
+    ]);
   });
 });
 
