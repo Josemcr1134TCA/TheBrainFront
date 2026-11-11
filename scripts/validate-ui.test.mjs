@@ -713,6 +713,35 @@ describe("[EP00-TBR-004-CA1] percent-spacing ignores the CSS of styles: and stil
     assert.match(findings[0].sample, /5%/);
   });
 
+  // Negative control (security review, low): skipping styles: only hides warnings, never errors. A hard-coded #hex,
+  // an rgb() and an arbitrary w-[13px] inside styles: (string or array) are still errors, each on its own line.
+  const BAD_CSS = [
+    ".tb-sample { color: #ff0000; }",
+    ".tb-sample .ico { background: rgb(0 0 0); }",
+    ".tb-sample .bar { @apply w-[13px]; }",
+  ];
+  const STYLE_FORMS = [
+    ["a string", `\`\n    ${BAD_CSS.join("\n    ")}\n  \``],
+    ["an array", `[\`\n    ${BAD_CSS.join("\n    ")}\n  \`]`],
+    ["an array of quoted strings", `[\n    '${BAD_CSS[0]}',\n    "${BAD_CSS[1]}",\n    '${BAD_CSS[2]}',\n  ]`],
+  ];
+  for (const [form, styles] of STYLE_FORMS) {
+    test(`[EP00-TBR-004-CA1] #hex, rgb() and w-[13px] inside styles: as ${form} are still errors (negative control)`, () => {
+      assert.equal(typeof review, "function");
+      const text = component({ template: '<p class="tb-sample">Avance</p>', styles });
+      const lines = text.split("\n");
+      const lineWith = (s) => lines.findIndex((l) => l.includes(s)) + 1;
+      const errors = review(text, ".ts").filter((f) => f.level === "error");
+      const got = errors.map((f) => `${f.id}@${f.line}`).sort();
+      const expected = [
+        `hardcoded-color@${lineWith("#ff0000")}`,
+        `hardcoded-color@${lineWith("rgb(0 0 0)")}`,
+        `arbitrary-value@${lineWith("w-[13px]")}`,
+      ].sort();
+      assert.deepEqual(got, expected, `los errores dentro de styles: deben seguir saliendo: ${JSON.stringify(errors)}`);
+    });
+  }
+
   test("[EP00-TBR-004-CA1] the full review of src/ has no percent warning coming from the pieces' styles:", () => {
     const r = run([]);
     assert.equal(r.signal, null);
