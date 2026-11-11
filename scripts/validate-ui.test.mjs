@@ -12,7 +12,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
@@ -536,17 +536,31 @@ function ownSelectors(files) {
 const MARKER_CLASSES = /^(?:group|peer)(?:\/[\w-]+)?$/;
 
 // Compiles a list of classes with the Tailwind CLI against theme.css (same mechanism as scripts/test-theme.mjs).
+// [EP00-TBR-004-CA1] Each run uses its own temporary folder (two runs at a time do not collide) and removes it at the
+// end; a hung child is killed (security review, low finding). The folder stays under node_modules/ so that
+// @import "tailwindcss" resolves.
+const TAILWIND_CACHE = join(FRONT, "node_modules", ".cache");
 function compileWithTheme(classes) {
-  const tmp = join(FRONT, "node_modules", ".cache", "tb-ui-classes");
-  mkdirSync(tmp, { recursive: true });
-  const input = join(tmp, "input.css");
-  const output = join(tmp, "output.css");
-  const theme = join(UI, "tokens", "theme.css").split("\\").join("/");
-  writeFileSync(input, `@import "tailwindcss" source(none);\n@import "${theme}";\n@source inline("${[...classes].join(" ")}");\n`);
-  const cli = join(FRONT, "node_modules", "@tailwindcss", "cli", "dist", "index.mjs");
-  const r = spawnSync(process.execPath, [cli, "-i", input, "-o", output], { cwd: FRONT, encoding: "utf8", timeout: CHILD_TIMEOUT_MS });
-  assert.equal(r.status, 0, `Tailwind no compiló: ${r.stderr || r.stdout}`);
-  return readFileSync(output, "utf8");
+  mkdirSync(TAILWIND_CACHE, { recursive: true });
+  const tmp = mkdtempSync(join(TAILWIND_CACHE, "tb-ui-classes-"));
+  try {
+    const input = join(tmp, "input.css");
+    const output = join(tmp, "output.css");
+    const theme = join(UI, "tokens", "theme.css").split("\\").join("/");
+    writeFileSync(input, `@import "tailwindcss" source(none);\n@import "${theme}";\n@source inline("${[...classes].join(" ")}");\n`);
+    const cli = join(FRONT, "node_modules", "@tailwindcss", "cli", "dist", "index.mjs");
+    const r = spawnSync(process.execPath, [cli, "-i", input, "-o", output], {
+      cwd: FRONT,
+      encoding: "utf8",
+      timeout: CHILD_TIMEOUT_MS,
+      killSignal: "SIGKILL",
+    });
+    assert.equal(r.signal, null, `Tailwind no terminó (señal ${r.signal}, límite ${CHILD_TIMEOUT_MS / 1000} s)`);
+    assert.equal(r.status, 0, `Tailwind no compiló: ${r.stderr || r.stdout}`);
+    return readFileSync(output, "utf8");
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 }
 const cssEscapeClass = (c) => c.replace(/[^\w-]/g, (ch) => `\\${ch}`);
 const compiles = (css, c) => new RegExp(`\\.${escapeRe(cssEscapeClass(c))}(?![\\w-])`).test(css);
@@ -632,6 +646,15 @@ describe("[EP00-TBR-004-CA1] pieces and formats only use tokens", () => {
     assert.deepEqual(bad, [], `clases que no salen de tokens.json (no compilan con theme.css):\n${bad.join("\n")}`);
   });
 
+  test("[EP00-TBR-004-CA1] compileWithTheme leaves no temporary folder behind", () => {
+    const list = () => (existsSync(TAILWIND_CACHE) ? readdirSync(TAILWIND_CACHE).filter((n) => n.startsWith("tb-ui-classes")) : []);
+    const before = new Set(list());
+    const css = compileWithTheme(new Set(["bg-surface"]));
+    assert.ok(compiles(css, "bg-surface"), "control: bg-surface debe compilar");
+    const left = list().filter((n) => !before.has(n));
+    assert.deepEqual(left, [], `quedaron carpetas temporales: ${left.join(", ")}`);
+  });
+
   test("[EP00-TBR-004-CA1] templateClasses reads class lists, [class.x] and host class (self-check)", () => {
     const sample = `@Component({ host: { class: 'tb-btn inline-flex' }, template: \`<b class="bg-white {{ x }}" [class.text-ink]="on"></b>\` })`;
     assert.deepEqual([...templateClasses(sample)].sort(), ["bg-white", "inline-flex", "tb-btn", "text-ink"]);
@@ -645,6 +668,56 @@ describe("[EP00-TBR-004-CA1] pieces and formats only use tokens", () => {
     }
     assert.ok(sourcesOf(COMPONENTS).length > 0, "no hay fuentes en src/ui/components/");
     assert.deepEqual(bad, [], `usa pipes de formato de Angular:\n${bad.join("\n")}`);
+  });
+});
+
+// [EP00-TBR-004-CA1] H6: the percent-spacing rule reads text for people (templates), not the CSS literals of a
+// component's styles: (color-mix, gradients, transforms). The 20 warnings of T4 were all of this kind (D-051 note).
+describe("[EP00-TBR-004-CA1] percent-spacing ignores the CSS of styles: and still reviews template text (H6)", () => {
+  const percentFindings = (text, ext = ".ts") => review(text, ext).filter((f) => f.id === "percent-spacing");
+  const component = ({ template, styles }) =>
+    [
+      "import { Component } from '@angular/core';",
+      "@Component({",
+      "  selector: 'tb-sample',",
+      `  template: \`${template}\`,`,
+      `  styles: ${styles},`,
+      "})",
+      "export class TbSample {}",
+    ].join("\n");
+  const CSS = [
+    ".tb-sample { border-color: color-mix(in srgb, var(--color-accent) 30%, transparent); }",
+    ".tb-sample .ico { transform: rotate(25%); }",
+    ".tb-sample .bar { background: linear-gradient(90deg, var(--color-surface-hover) 25%, var(--color-surface-selected) 50%); width: 38%; }",
+  ].join("\n    ");
+
+  test("[EP00-TBR-004-CA1] a % without a space inside styles: `...` gives no warning", () => {
+    assert.equal(typeof review, "function");
+    const findings = percentFindings(component({ template: '<p class="tb-sample">Avance</p>', styles: `\`\n    ${CSS}\n  \`` }));
+    assert.deepEqual(findings, [], `el CSS de styles: no es texto para personas: ${JSON.stringify(findings)}`);
+  });
+
+  test("[EP00-TBR-004-CA1] a % without a space inside styles: [`...`] (array form) gives no warning", () => {
+    assert.equal(typeof review, "function");
+    const findings = percentFindings(component({ template: '<p class="tb-sample">Avance</p>', styles: `[\`\n    ${CSS}\n  \`]` }));
+    assert.deepEqual(findings, [], `el CSS de styles: no es texto para personas: ${JSON.stringify(findings)}`);
+  });
+
+  test("[EP00-TBR-004-CA1] «24.5%» in the template text still gives the warning, once, on the template line", () => {
+    assert.equal(typeof review, "function");
+    const text = component({ template: '<p class="tb-sample">Avance 24.5%</p>', styles: `\`\n    ${CSS}\n  \`` });
+    const findings = percentFindings(text);
+    assert.equal(findings.length, 1, `se esperaba un aviso, el del texto: ${JSON.stringify(findings)}`);
+    assert.equal(findings[0].level, "warning");
+    assert.equal(findings[0].line, text.split("\n").findIndex((l) => l.includes("Avance 24.5%")) + 1);
+    assert.match(findings[0].sample, /5%/);
+  });
+
+  test("[EP00-TBR-004-CA1] the full review of src/ has no percent warning coming from the pieces' styles:", () => {
+    const r = run([]);
+    assert.equal(r.signal, null);
+    const lines = (r.stdout + r.stderr).split("\n").filter((l) => /porcentaje sin espacio/.test(l) && /src[\\/]ui[\\/]/.test(l));
+    assert.deepEqual(lines, [], `avisos de porcentaje en src/ui/ (CSS de styles:):\n${lines.join("\n")}`);
   });
 });
 
