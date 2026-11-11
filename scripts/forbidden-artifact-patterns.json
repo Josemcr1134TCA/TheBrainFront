@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "names": [
+    { "id": "vercel-config", "kind": "file", "name": "vercel.json", "reason": "configuración de Vercel" },
+    { "id": "vercel-dir", "kind": "dir", "name": ".vercel", "reason": "carpeta de proyecto de Vercel" },
+    { "id": "netlify-config", "kind": "file", "name": "netlify.toml", "reason": "configuración de Netlify" },
+    { "id": "netlify-dir", "kind": "dir", "name": ".netlify", "reason": "carpeta de proyecto de Netlify" },
+    { "id": "netlify-redirects", "kind": "file", "name": "_redirects", "reason": "redirecciones de Netlify o Cloudflare Pages" },
+    { "id": "netlify-headers", "kind": "file", "name": "_headers", "reason": "cabeceras de Netlify o Cloudflare Pages" },
+    { "id": "firebase-config", "kind": "file", "name": "firebase.json", "reason": "configuración de Firebase Hosting" },
+    { "id": "firebase-project", "kind": "file", "name": ".firebaserc", "reason": "proyecto de Firebase" },
+    { "id": "firebase-dir", "kind": "dir", "name": ".firebase", "reason": "caché de Firebase" },
+    { "id": "azure-static-web-apps", "kind": "file", "name": "staticwebapp.config.json", "reason": "configuración de Azure Static Web Apps" },
+    { "id": "cloudflare-wrangler", "kind": "file", "name": "wrangler.*", "reason": "configuración de Cloudflare" },
+    { "id": "aws-amplify", "kind": "file", "name": "amplify.yml", "reason": "configuración de AWS Amplify" },
+    { "id": "google-app-engine", "kind": "file", "name": "app.yaml", "reason": "configuración de Google App Engine" },
+    { "id": "env-file", "kind": "file", "name": ".env", "reason": "archivo de entorno (puede contener secretos)" },
+    { "id": "env-file-variant", "kind": "file", "name": ".env.*", "reason": "archivo de entorno (puede contener secretos)" },
+    { "id": "pem-file", "kind": "file", "name": "*.pem", "reason": "certificado o llave" },
+    { "id": "key-file", "kind": "file", "name": "*.key", "reason": "llave privada" },
+    { "id": "pkcs12-file", "kind": "file", "name": "*.p12", "reason": "almacén de llaves" },
+    { "id": "pfx-file", "kind": "file", "name": "*.pfx", "reason": "almacén de llaves" },
+    { "id": "ssh-key-file", "kind": "file", "name": "id_rsa*", "reason": "llave SSH" },
+    { "id": "ssh-ed25519-file", "kind": "file", "name": "id_ed25519*", "reason": "llave SSH" }
+  ],
+  "contents": [
+    { "id": "private-key-block", "kind": "regex", "pattern": "-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----", "reason": "llave privada" },
+    { "id": "service-role-jwt", "kind": "jwt-role", "role": "service_role", "reason": "llave service_role de Supabase" },
+    { "id": "supabase-secret-key", "kind": "regex", "pattern": "\\bsb_secret_[A-Za-z0-9_-]{20,}", "reason": "llave secreta de Supabase" },
+    { "id": "supabase-service-role-env", "kind": "regex", "pattern": "\\bSUPABASE_SERVICE_ROLE(?:_KEY)?\\b", "reason": "variable de la llave service_role de Supabase" },
+    { "id": "vercel-token-env", "kind": "regex", "pattern": "\\bVERCEL_(?:TOKEN|OIDC_TOKEN)\\b", "reason": "variable de token de Vercel" },
+    { "id": "postgres-url-with-password", "kind": "regex", "pattern": "postgres(?:ql)?://[^\\s:@/'\"`]+:[^\\s@/'\"`]+@", "reason": "cadena de conexión a PostgreSQL con contraseña" },
+    { "id": "github-token", "kind": "regex", "pattern": "\\b(?:gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{60,})\\b", "reason": "token de GitHub" },
+    { "id": "aws-access-key-id", "kind": "regex", "pattern": "\\b(?:AKIA|ASIA)[0-9A-Z]{16}\\b", "reason": "llave de acceso de AWS" },
+    { "id": "stripe-secret-key", "kind": "regex", "pattern": "\\b[sr]k_(?:live|test)_[0-9A-Za-z]{20,}\\b", "reason": "llave secreta de Stripe" },
+    { "id": "slack-token", "kind": "regex", "pattern": "\\bxox[abposr]-[0-9A-Za-z-]{10,}", "reason": "token de Slack" },
+    { "id": "google-api-key", "kind": "regex", "pattern": "\\bAIza[0-9A-Za-z_-]{35}\\b", "reason": "llave de API de Google o Firebase" }
+  ],
+  "exceptions": []
+}
