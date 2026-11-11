@@ -273,3 +273,138 @@ for (const theme of THEMES) {
     });
   });
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// [EP00-TBR-003-CA2] T4 contract, round 2 (decisions of the dev and the orchestrator, 2026-11-11):
+//   1. New input actionVariant: 'default' | 'primary', 'default' by default. With 'default' the primary action is the
+//      004 one (tb-btn, neither primary nor ghost). With 'primary' it is tb-btn primary. The secondary is always
+//      tb-btn ghost. In the approved UI «Reintentar» (error) and «Ir a la primera página» (invalid cursor) are primary.
+//   3. A secondary action without a primary action is not painted.
+// Some of these tests are regression guards of the 004 look and pass before T4; the ones that need the new API fail at
+// runtime because actionVariant or secondaryActionLabel does not exist yet.
+// ---------------------------------------------------------------------------------------------------------------------
+const lookOf = (b: HTMLElement | undefined) => ({
+  btn: !!b?.classList.contains('tb-btn'),
+  primary: !!b?.classList.contains('primary'),
+  ghost: !!b?.classList.contains('ghost'),
+});
+
+const DEFAULT_LOOK = { btn: true, primary: false, ghost: false };
+const PRIMARY_LOOK = { btn: true, primary: true, ghost: false };
+const GHOST_LOOK = { btn: true, primary: false, ghost: true };
+
+const textsOf = (variant: string) => ({ variant, heading: TEXTS[variant][0], message: TEXTS[variant][1] });
+
+for (const theme of THEMES) {
+  describe(`[EP00-TBR-003-CA2] TbEmptyState actionVariant (data-theme="${theme}")`, () => {
+    beforeEach(() => document.documentElement.setAttribute('data-theme', theme));
+    afterEach(() => document.documentElement.removeAttribute('data-theme'));
+
+    it('[EP00-TBR-003-CA2] without actionVariant the primary action is the 004 tb-btn (not primary, not ghost)', () => {
+      for (const variant of ['error', 'offline', 'no-results']) {
+        const { el } = render({ variant });
+        expect(buttons(el)).toHaveLength(1);
+        expect(lookOf(buttons(el)[0])).toEqual(DEFAULT_LOOK);
+      }
+    });
+
+    it('[EP00-TBR-003-CA2] actionVariant="default" looks exactly like no actionVariant', () => {
+      const alone = buttons(render({ variant: 'error' }).el)[0];
+      const explicit = buttons(render({ variant: 'error', actionVariant: 'default' }).el)[0];
+      expect(lookOf(explicit)).toEqual(DEFAULT_LOOK);
+      expect(explicit.className).toBe(alone.className);
+    });
+
+    it('[EP00-TBR-003-CA2] actionVariant="primary" makes «Reintentar» a tb-btn primary (approved UI, error)', () => {
+      const { el } = render({ variant: 'error', actionVariant: 'primary' });
+      expect(labelsOf(el)).toEqual(['Reintentar']);
+      expect(lookOf(byLabel(el, 'Reintentar'))).toEqual(PRIMARY_LOOK);
+    });
+
+    it('[EP00-TBR-003-CA2] actionVariant="primary" applies to an explicit actionLabel (approved UI, invalid cursor)', () => {
+      const { el } = render({ variant: 'error', actionLabel: 'Ir a la primera página', actionVariant: 'primary' });
+      expect(labelsOf(el)).toEqual(['Ir a la primera página']);
+      expect(lookOf(byLabel(el, 'Ir a la primera página'))).toEqual(PRIMARY_LOOK);
+    });
+
+    it('[EP00-TBR-003-CA2] actionVariant="primary" with a secondary: primary is tb-btn primary, secondary stays ghost', () => {
+      const { el } = renderWithSecondary({ actionVariant: 'primary' });
+      expect(labelsOf(el)).toEqual(['Reintentar', 'Ir a la primera página']);
+      expect(lookOf(byLabel(el, 'Reintentar'))).toEqual(PRIMARY_LOOK);
+      expect(lookOf(byLabel(el, 'Ir a la primera página'))).toEqual(GHOST_LOOK);
+    });
+
+    it('[EP00-TBR-003-CA2] actionVariant="default" with a secondary: primary is the 004 tb-btn, secondary ghost', () => {
+      const { el } = renderWithSecondary({ actionVariant: 'default' });
+      expect(labelsOf(el)).toEqual(['Reintentar', 'Ir a la primera página']);
+      expect(lookOf(byLabel(el, 'Reintentar'))).toEqual(DEFAULT_LOOK);
+      expect(lookOf(byLabel(el, 'Ir a la primera página'))).toEqual(GHOST_LOOK);
+    });
+
+    it('[EP00-TBR-003-CA2] actionVariant does not change the role nor the emitted outputs', () => {
+      const { el, fixture, primary, secondary } = renderWithSecondary({ actionVariant: 'primary' });
+      expect(lookOf(byLabel(el, 'Reintentar'))).toEqual(PRIMARY_LOOK);
+      expect(roleOf(el)).toBe('alert');
+      byLabel(el, 'Reintentar')!.click();
+      fixture.detectChanges();
+      expect(primary()).toBe(1);
+      expect(secondary()).toBe(0);
+    });
+
+    it('[EP00-TBR-003-CA2] actionVariant can be switched at runtime: default -> primary -> default', () => {
+      const { el, fixture } = render({ variant: 'error' });
+      fixture.componentRef.setInput('actionVariant', 'primary');
+      fixture.detectChanges();
+      expect(lookOf(buttons(el)[0])).toEqual(PRIMARY_LOOK);
+      fixture.componentRef.setInput('actionVariant', 'default');
+      fixture.detectChanges();
+      expect(lookOf(buttons(el)[0])).toEqual(DEFAULT_LOOK);
+    });
+
+    it('[EP00-TBR-003-CA2] focusActionOnShow still focuses the primary action when it is primary', async () => {
+      const { el, fixture } = render({ variant: 'error', actionVariant: 'primary', focusActionOnShow: true });
+      await fixture.whenStable();
+      fixture.detectChanges();
+      expect(lookOf(byLabel(el, 'Reintentar'))).toEqual(PRIMARY_LOOK);
+      expect(document.activeElement).toBe(byLabel(el, 'Reintentar'));
+    });
+
+    it('[EP00-TBR-003-CA2] renders no hand-written color with actionVariant="primary"', () => {
+      const { el } = renderWithSecondary({ actionVariant: 'primary' });
+      expect(lookOf(byLabel(el, 'Reintentar'))).toEqual(PRIMARY_LOOK);
+      expect(el.outerHTML).not.toMatch(/#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(/i);
+    });
+  });
+
+  describe(`[EP00-TBR-003-CA2] TbEmptyState secondary without primary (data-theme="${theme}")`, () => {
+    beforeEach(() => document.documentElement.setAttribute('data-theme', theme));
+    afterEach(() => document.documentElement.removeAttribute('data-theme'));
+
+    for (const variant of ['empty', 'forbidden']) {
+      it(`[EP00-TBR-003-CA2] ${variant} (no default action) with only secondaryActionLabel paints no button nor .acts row`, () => {
+        const { el } = renderWithSecondary(textsOf(variant));
+        expect(buttons(el)).toHaveLength(0);
+        expect(el.querySelector('.acts')).toBeNull();
+      });
+    }
+
+    it('[EP00-TBR-003-CA2] the secondary appears as soon as there is a primary, and goes away with it', () => {
+      const { el, fixture } = renderWithSecondary(textsOf('empty'));
+      expect(buttons(el)).toHaveLength(0);
+      fixture.componentRef.setInput('actionLabel', 'Crear producto');
+      fixture.detectChanges();
+      expect(labelsOf(el)).toEqual(['Crear producto', 'Ir a la primera página']);
+      fixture.componentRef.setInput('actionLabel', undefined);
+      fixture.detectChanges();
+      expect(buttons(el)).toHaveLength(0);
+    });
+
+    it('[EP00-TBR-003-CA2] an empty actionLabel on a variant without default action also hides the secondary', () => {
+      const { el, fixture } = renderWithSecondary({ ...textsOf('forbidden'), actionLabel: 'Pedir acceso' });
+      expect(labelsOf(el)).toEqual(['Pedir acceso', 'Ir a la primera página']);
+      fixture.componentRef.setInput('actionLabel', '');
+      fixture.detectChanges();
+      expect(buttons(el)).toHaveLength(0);
+    });
+  });
+}

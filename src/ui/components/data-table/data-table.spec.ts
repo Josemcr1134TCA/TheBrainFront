@@ -1209,3 +1209,155 @@ describe('[EP00-TBR-003-CA2] G3 TbDataTable secondary action in the error state'
     expect(out.retry).toBe(1);
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------------
+// [EP00-TBR-003-CA2][EP00-TBR-003-CA3] T4 contract, round 2 (decisions of the dev and the orchestrator, 2026-11-11):
+//   1. TbTableText gains an optional actionVariant ('default' | 'primary'); the table forwards it to its EmptyState.
+//      Without it everything stays as in 004. In the approved UI «Reintentar» (error) and «Ir a la primera página»
+//      (invalid cursor) are primary; the secondary is always ghost.
+//   2. Single count in the footer: with content projected in [tbFooter] the table does not paint its own count; the
+//      footer shows only what the projected content brings. Without projection the footer is the 004 one.
+//   3. A secondary action without a primary action is not painted.
+// Texts are passed untyped through setInput so this file keeps compiling before T4 adds actionVariant to TbTableText.
+// ---------------------------------------------------------------------------------------------------------------------
+const lookOf = (b: HTMLElement | undefined) => ({
+  btn: !!b?.classList.contains('tb-btn'),
+  primary: !!b?.classList.contains('primary'),
+  ghost: !!b?.classList.contains('ghost'),
+});
+const DEFAULT_LOOK = { btn: true, primary: false, ghost: false };
+const PRIMARY_LOOK = { btn: true, primary: true, ghost: false };
+const GHOST_LOOK = { btn: true, primary: false, ghost: true };
+
+describe('[EP00-TBR-003-CA2] TbDataTable forwards actionVariant to its EmptyState', () => {
+  it('[EP00-TBR-003-CA2] without actionVariant «Reintentar» is the 004 tb-btn (not primary, not ghost)', () => {
+    const { el } = render({ state: 'error', rows: [] });
+    expect(lookOf(buttonByText(emptyState(el)!, 'Reintentar'))).toEqual(DEFAULT_LOOK);
+  });
+
+  it('[EP00-TBR-003-CA2] error with actionVariant "primary": «Reintentar» is tb-btn primary (approved UI)', () => {
+    const texts = { ...TEXTS, error: { ...TEXTS.error, actionVariant: 'primary' } };
+    const { el, out, sync } = render({ state: 'error', rows: [], texts });
+    const retry = buttonByText(emptyState(el)!, 'Reintentar');
+    expect(lookOf(retry)).toEqual(PRIMARY_LOOK);
+    retry!.click();
+    sync();
+    expect(out.retry).toBe(1);
+  });
+
+  it('[EP00-TBR-003-CA2] VALIDATION error with actionVariant "primary": «Reintentar» primary, «Ir a la primera página» ghost', () => {
+    const texts = { ...VALIDATION_TEXTS, error: { ...VALIDATION_TEXTS.error, actionVariant: 'primary' } };
+    const { el } = render({ state: 'error', rows: [], texts });
+    expect(emptyLabels(el)).toEqual(['Reintentar', 'Ir a la primera página']);
+    expect(lookOf(buttonByText(emptyState(el)!, 'Reintentar'))).toEqual(PRIMARY_LOOK);
+    expect(lookOf(buttonByText(emptyState(el)!, 'Ir a la primera página'))).toEqual(GHOST_LOOK);
+  });
+
+  it('[EP00-TBR-003-CA2] INVALID_CURSOR with actionVariant "primary": «Ir a la primera página» is tb-btn primary', () => {
+    const texts = {
+      ...TEXTS,
+      error: {
+        heading: 'Esa página ya no está disponible',
+        message: 'Vuelve a la primera página.',
+        actionLabel: 'Ir a la primera página',
+        actionVariant: 'primary',
+      },
+    };
+    const { el } = render({ state: 'error', rows: [], texts });
+    expect(emptyLabels(el)).toEqual(['Ir a la primera página']);
+    expect(lookOf(buttonByText(emptyState(el)!, 'Ir a la primera página'))).toEqual(PRIMARY_LOOK);
+  });
+
+  it('[EP00-TBR-003-CA2] actionVariant "default" looks exactly like no actionVariant', () => {
+    const texts = { ...TEXTS, error: { ...TEXTS.error, actionVariant: 'default' } };
+    const plain = buttonByText(emptyState(render({ state: 'error', rows: [] }).el)!, 'Reintentar')!;
+    const explicit = buttonByText(emptyState(render({ state: 'error', rows: [], texts }).el)!, 'Reintentar')!;
+    expect(lookOf(explicit)).toEqual(DEFAULT_LOOK);
+    expect(explicit.className).toBe(plain.className);
+  });
+
+  it('[EP00-TBR-003-CA2] actionVariant is per variant: primary on error does not change offline', () => {
+    const texts = { ...TEXTS, error: { ...TEXTS.error, actionVariant: 'primary' } };
+    const { el, set } = render({ state: 'error', rows: [], texts });
+    expect(lookOf(buttonByText(emptyState(el)!, 'Reintentar'))).toEqual(PRIMARY_LOOK);
+    set({ state: 'offline' });
+    expect(lookOf(buttonByText(emptyState(el)!, 'Reintentar'))).toEqual(DEFAULT_LOOK);
+  });
+
+  it('[EP00-TBR-003-CA2] actionVariant "primary" on the empty variant applies to its own action label', () => {
+    const texts = { ...TEXTS, empty: { ...TEXTS.empty, actionVariant: 'primary' } };
+    const { el } = render({ state: 'ready', rows: [], texts });
+    expect(lookOf(buttonByText(emptyState(el)!, 'Crear producto'))).toEqual(PRIMARY_LOOK);
+  });
+});
+
+describe('[EP00-TBR-003-CA2] TbDataTable secondary action without primary action', () => {
+  it('[EP00-TBR-003-CA2] forbidden with only secondaryActionLabel paints no button in the EmptyState', () => {
+    const texts = { ...TEXTS, forbidden: { ...TEXTS.forbidden, secondaryActionLabel: 'Ir a la primera página' } };
+    const { el } = render({ state: 'forbidden', rows: [], texts });
+    expect(emptyState(el)).not.toBeNull();
+    expect(emptyLabels(el)).toEqual([]);
+  });
+
+  it('[EP00-TBR-003-CA2] offline (default action «Reintentar») with secondaryActionLabel paints both, the secondary ghost', () => {
+    const texts = { ...TEXTS, offline: { ...TEXTS.offline, secondaryActionLabel: 'Ir a la primera página' } };
+    const { el } = render({ state: 'offline', rows: [], texts });
+    expect(emptyLabels(el)).toEqual(['Reintentar', 'Ir a la primera página']);
+    expect(lookOf(buttonByText(emptyState(el)!, 'Ir a la primera página'))).toEqual(GHOST_LOOK);
+  });
+});
+
+const flat = (node: Element | null) => (node?.textContent ?? '').replace(/\s+/g, ' ').trim();
+
+@Component({
+  selector: 'tb-data-table-count-footer-host',
+  imports: [TbDataTable],
+  template: `
+    <tb-data-table
+      title="Productos"
+      [columns]="columns"
+      [rows]="rows"
+      [rowKey]="rowKey"
+      state="ready"
+      searchLabel="Buscar productos"
+      [itemLabel]="itemLabel"
+      loadingLabel="Cargando productos"
+      [texts]="texts"
+    >
+      <div tbFooter id="caller-count"><span>Página 1 · 20 productos</span></div>
+    </tb-data-table>
+  `,
+})
+class CountFooterHost {
+  columns = COLUMNS;
+  rows: Row[] = makeRows(20);
+  rowKey = (r: Row) => r.id;
+  itemLabel = { one: 'producto', other: 'productos' };
+  texts = TEXTS;
+}
+
+describe('[EP00-TBR-003-CA3] G2 TbDataTable single count in the footer (hallazgo 1)', () => {
+  it('[EP00-TBR-003-CA3] with [tbFooter] content the table does not paint its own count', () => {
+    const { el } = renderFooterHost();
+    const foot = el.querySelector('footer');
+    expect(foot).not.toBeNull();
+    expect(foot!.querySelector('#caller-footer')).not.toBeNull();
+    expect(flat(foot)).not.toContain('20 productos');
+    expect(flat(foot)).toBe('Siguiente');
+  });
+
+  it('[EP00-TBR-003-CA3] with [tbFooter] content the footer shows the projected count once («Página 1 · 20 productos»)', () => {
+    const fixture = TestBed.createComponent(CountFooterHost);
+    fixture.detectChanges();
+    const foot = (fixture.nativeElement as HTMLElement).querySelector('footer');
+    expect(foot).not.toBeNull();
+    expect(foot!.querySelector('#caller-count')).not.toBeNull();
+    expect(flat(foot)).toBe('Página 1 · 20 productos');
+    expect(flat(foot).match(/20 productos/g)).toHaveLength(1);
+  });
+
+  it('[EP00-TBR-003-CA3] without [tbFooter] content the footer keeps the 004 count', () => {
+    const { el } = render({ rows: makeRows(20) });
+    expect(flat(el.querySelector('footer'))).toBe('20 productos');
+  });
+});

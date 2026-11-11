@@ -290,3 +290,50 @@ describe('[EP00-TBR-003-CA3] design system public API exports PZ-23', () => {
     expect(Object.keys(publicApi)).toContain('TbCursorPager');
   });
 });
+
+// [EP00-TBR-003-CA3] T4 contract, round 2 (decisions of the dev and the orchestrator, 2026-11-11):
+//   3. Edge cases: a page below 1 is treated as page 1; count 0 reads «Página 1 · 0 productos» (plural itemLabel).
+//   4. The nav has aria-label="Paginación", exactly.
+describe('[EP00-TBR-003-CA3] TbCursorPager edge cases and exact label', () => {
+  it('[EP00-TBR-003-CA3] the nav aria-label is exactly «Paginación»', () => {
+    for (const page of [1, 2]) {
+      const landmark = nav(render({ page }).el);
+      expect(landmark).not.toBeNull();
+      expect(landmark!.getAttribute('aria-label')).toBe('Paginación');
+    }
+  });
+
+  for (const page of [0, -1, -42]) {
+    it(`[EP00-TBR-003-CA3] page ${page} is treated as page 1: «Página 1 · 20 productos» and only «Siguiente»`, () => {
+      const { el } = render({ page, hasNext: true, count: 20 });
+      expect(text(el)).toContain('Página 1 · 20 productos');
+      expect(text(el)).not.toContain(`Página ${page}`);
+      expect(labels(el)).toEqual(['Siguiente']);
+    });
+  }
+
+  it('[EP00-TBR-003-CA3] a page below 1 set at runtime falls back to page 1', () => {
+    const { el, set } = render({ page: 2, hasNext: true, count: 20 });
+    expect(labels(el)).toEqual(['Primera página', 'Anterior', 'Siguiente']);
+    set({ page: 0 });
+    expect(text(el)).toContain('Página 1 · 20 productos');
+    expect(labels(el)).toEqual(['Siguiente']);
+  });
+
+  it('[EP00-TBR-003-CA3] count 0 reads «Página 1 · 0 productos» (plural itemLabel)', () => {
+    const { el } = render({ page: 1, hasNext: false, count: 0 });
+    expect(text(el)).toContain('Página 1 · 0 productos');
+    expect(text(el)).not.toMatch(/0 producto(?!s)/);
+  });
+
+  it('[EP00-TBR-003-CA3] count 0 uses the caller plural itemLabel', () => {
+    const { el } = render({ page: 1, hasNext: false, count: 0, itemLabel: { one: 'artículo', other: 'artículos' } });
+    expect(text(el)).toContain('Página 1 · 0 artículos');
+  });
+
+  it('[EP00-TBR-003-CA3] page below 1 and count 0 together read «Página 1 · 0 productos»', () => {
+    const { el } = render({ page: 0, hasNext: false, count: 0 });
+    expect(text(el)).toContain('Página 1 · 0 productos');
+    expect(labels(el)).toEqual(['Siguiente']);
+  });
+});
