@@ -5,19 +5,42 @@ on:
     branches: [main]
 permissions:
   contents: read
+# One run per PR (a new push cancels the previous run of that PR); pushes to main group by commit and never cancel.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
 jobs:
+  # Required status check of main (EP00-TBR-002). Renaming this job or adding a job-level "if" breaks branch protection.
   frontend:
+    name: frontend
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
           cache: npm
-      - run: npm ci
-      - name: Design system al día (tokens, documento de referencia, tema)
+      - name: Instalar dependencias
+        run: npm ci
+      - name: Validación estática · design system (ds:check, incluye ds:validate)
         run: npm run ds:check
-      - name: Reglas de arquitectura del arnés (fronteras entre módulos, design system, sin backend ni Hub)
+      - name: Validación estática · tipos de la app y de las pruebas (tsc)
+        run: npm run typecheck
+      - name: Fronteras · reglas de arquitectura (arch:check)
         run: npm run arch:check
-      - run: npm run build
-      - run: npm test -- --watch=false
+      - name: Pruebas
+        run: npm test -- --watch=false
+      - name: Build
+        run: npm run build
+      - name: Artefacto portátil · sin configuración de nube ni secretos (artifact:check)
+        run: npm run artifact:check
+      - name: Subir el artefacto como resultado de la CI (no se publica en ningún hosting)
+        uses: actions/upload-artifact@v4
+        with:
+          name: the-brain-front-dist
+          path: dist/the-brain-front/
+          if-no-files-found: error
+          retention-days: 14

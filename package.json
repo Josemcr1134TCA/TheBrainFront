@@ -13,7 +13,10 @@
     "ds:validate": "node scripts/validate-ui.mjs --test && node --test scripts/validate-ui.test.mjs && node scripts/validate-ui.mjs",
     "module:new": "node scripts/new-module.mjs",
     "arch:test": "node --test scripts/arch-check.test.mjs scripts/new-module.test.mjs",
-    "arch:check": "npm run arch:test && depcruise src --config .dependency-cruiser.cjs"
+    "arch:check": "npm run arch:test && depcruise src --config .dependency-cruiser.cjs",
+    "typecheck": "tsc --noEmit -p tsconfig.app.json && tsc --noEmit -p tsconfig.spec.json",
+    "ci:test": "node --test scripts/check-artifact.test.mjs scripts/ci-workflow.test.mjs",
+    "artifact:check": "npm run ci:test && node scripts/check-artifact.mjs"
   },
   "private": true,
   "packageManager": "npm@11.12.1",
