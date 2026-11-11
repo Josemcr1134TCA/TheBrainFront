@@ -2,8 +2,8 @@
 // [EP00-TBR-001-CA2] Every forbidden rule fails on a synthetic violation and reports rule + import.
 // [EP00-TBR-014-CA3] Rule names are in English (DEC-0013, DEC-0017): boundary-<module>, module-layers,
 // http-only-in-data, ui-independent, no-cycles, hub-only-via-api and no-backend-in-front.
-// [EP00-TBR-004-CA1] DA-3 adds ui-public-api: src/app/ imports src/ui/ only through src/ui/index.ts
-// (DEC-0017 amendment of 2026-11-11: 15 forbidden rules in total).
+// [EP00-TBR-004-CA1] DA-3 adds ui-public-api: every file under src/ outside src/ui/ imports src/ui/ only through
+// src/ui/index.ts or src/ui/tokens/ (widened by the tech lead on 2026-11-11; DEC-0017 amendment: 15 forbidden rules in total).
 // [EP00-TBR-014-CA6] The module list of .dependency-cruiser.cjs must match the table fixed in this file (MODULES).
 // If it does not, this file fails, so `arch:check` fails in its test step and says which name is extra and which is missing.
 // Fixtures are written at runtime under tmp/ (ignored by git) and removed afterwards.
@@ -174,6 +174,17 @@ const CASES = [
     to: "src/ui/format/format.ts",
   },
   {
+    tag: "[EP00-TBR-004-CA1]",
+    title: "fails on ui-public-api when src/main.ts (outside src/app/) imports a design system internal",
+    rule: "ui-public-api",
+    files: {
+      "src/ui/components/button/button.ts": "export const button = 'button';\n",
+      "src/main.ts": "import { button } from './ui/components/button/button';\nexport const main = button;\n",
+    },
+    from: "src/main.ts",
+    to: "src/ui/components/button/button.ts",
+  },
+  {
     title: "fails on no-cycles when two files import each other",
     rule: "no-cycles",
     cycle: true,
@@ -267,6 +278,45 @@ describe("[EP00-TBR-001-CA2][EP00-TBR-014-CA3] arch:check rules", { concurrency:
   });
 });
 
+// [EP00-TBR-004-CA1] Widened ui-public-api (decision of the tech lead, 2026-11-11): every file under src/ outside src/ui/
+// reaches src/ui/ only through src/ui/index.ts or src/ui/tokens/; pieces inside src/ui/ may import each other.
+describe("[EP00-TBR-004-CA1] widened ui-public-api: allowed imports (negative controls)", { concurrency: CONCURRENCY }, () => {
+  const CONTROLS = [
+    {
+      title: "src/main.ts imports src/ui/index.ts",
+      files: {
+        "src/ui/components/button/button.ts": "export const button = 'button';\n",
+        "src/ui/index.ts": "export { button } from './components/button/button';\n",
+        "src/main.ts": "import { button } from './ui/index';\nexport const main = button;\n",
+      },
+    },
+    {
+      title: "a file outside src/ui/ (src/app/ and src/main.ts) imports src/ui/tokens/",
+      files: {
+        "src/ui/tokens/tokens.ts": "export const tokens = { accent: 'var(--tb-accent)' };\n",
+        "src/app/app.ts": "import { tokens } from '../ui/tokens/tokens';\nexport const app = tokens;\n",
+        "src/main.ts": "import { tokens } from './ui/tokens/tokens';\nexport const main = tokens;\n",
+      },
+    },
+    {
+      title: "inside src/ui/, a piece imports another internal piece",
+      files: {
+        "src/ui/components/icon/icon.ts": "export const icon = 'icon';\n",
+        "src/ui/components/button/button.ts": "import { icon } from '../icon/icon';\nexport const button = icon;\n",
+        "src/ui/format/format.ts": "export const formatMoney = (v: number) => String(v);\n",
+        "src/ui/components/data-table/data-table.ts":
+          "import { button } from '../button/button';\nimport { formatMoney } from '../../format/format';\nexport const table = { button, formatMoney };\n",
+      },
+    },
+  ];
+  for (const c of CONTROLS) {
+    it(`[EP00-TBR-004-CA1] passes (exit 0) when ${c.title}`, { timeout: TEST_TIMEOUT_MS }, async () => {
+      const result = await cruise(makeFixture(c.files));
+      assert.equal(result.status, 0, `esta importación debe estar permitida (${c.title}):\n${result.stdout}${result.stderr}`);
+    });
+  }
+});
+
 test("[EP00-TBR-001-CA2][EP00-TBR-014-CA3] every forbidden rule in .dependency-cruiser.cjs has a test case (coverage)", () => {
   const configured = config.forbidden.map((r) => r.name);
   const covered = new Set(CASES.map((c) => c.rule));
@@ -289,19 +339,23 @@ test("[EP00-TBR-014-CA3][EP00-TBR-004-CA1] the config has exactly the 15 forbidd
   assert.deepEqual([...configured].sort(), [...EXPECTED_RULES].sort(), `las reglas no son las ${EXPECTED_RULE_COUNT} esperadas: ${configured.join(", ")}`);
 });
 
-test("[EP00-TBR-004-CA1] ui-public-api is scoped to src/app/ and only lets src/ui/index.ts through", () => {
+test("[EP00-TBR-004-CA1] ui-public-api covers all of src/ except src/ui/ and only lets src/ui/index.ts and src/ui/tokens/ through", () => {
   const rule = config.forbidden.find((r) => r.name === "ui-public-api");
   assert.ok(rule, "falta la regla ui-public-api en .dependency-cruiser.cjs (DA-3)");
   assert.equal(rule.severity, "error");
   assert.equal(typeof rule.comment, "string");
   assert.notEqual(rule.comment.trim(), "", "la regla debe explicar en comment por qué falla");
-  const from = new RegExp(rule.from.path);
-  const to = new RegExp(rule.to.path);
-  const toNot = new RegExp(rule.to.pathNot);
-  assert.ok(from.test("src/app/catalog/pages/list.ts") && !from.test("src/ui/components/data-table/data-table.ts"));
-  assert.ok(to.test("src/ui/components/button/button.ts") && to.test("src/ui/format/format.ts"));
-  assert.ok(toNot.test("src/ui/index.ts"), "src/ui/index.ts debe quedar permitido");
-  assert.ok(!toNot.test("src/ui/components/index.ts") && !toNot.test("src/ui/format/index.ts"), "solo src/ui/index.ts es la API pública");
+  const matches = (side, path) => new RegExp(side.path).test(path) && !(side.pathNot && new RegExp(side.pathNot).test(path));
+  // from: ^src/ minus ^src/ui/
+  for (const p of ["src/app/catalog/pages/list.ts", "src/app/app.ts", "src/main.ts", "src/core/x.ts"])
+    assert.ok(matches(rule.from, p), `la regla debe vigilar las importaciones que salen de ${p}`);
+  for (const p of ["src/ui/components/data-table/data-table.ts", "src/ui/index.ts", "src/ui/format/format.ts"])
+    assert.ok(!matches(rule.from, p), `la regla no debe vigilar lo que sale de ${p} (dentro de src/ui/)`);
+  // to: ^src/ui/ minus ^src/ui/(index.ts|tokens/)
+  for (const p of ["src/ui/components/button/button.ts", "src/ui/format/format.ts", "src/ui/components/index.ts", "src/ui/format/index.ts"])
+    assert.ok(matches(rule.to, p), `${p} es interno y debe quedar prohibido`);
+  for (const p of ["src/ui/index.ts", "src/ui/tokens/tokens.json", "src/ui/tokens/theme.ts"])
+    assert.ok(!matches(rule.to, p), `${p} debe quedar permitido`);
 });
 
 // [EP00-TBR-014-CA6] Pure comparison between the module list of the config and the fixed table.
