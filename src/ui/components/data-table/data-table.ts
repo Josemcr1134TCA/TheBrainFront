@@ -43,6 +43,8 @@ export interface TbColumn<T = any> {
   readonly sortable?: boolean;
   /** Track of the grid for this column. By default minmax(0,1fr). */
   readonly track?: string;
+  /** Cells (not the header) get tb-num: mono font and tabular figures. The value shows as text (D-055). */
+  readonly mono?: boolean;
 }
 
 /** Heading, message and optional action label of one EmptyState variant. */
@@ -86,6 +88,7 @@ interface CellView {
   readonly mute: boolean;
   readonly num: boolean;
   readonly mono: boolean;
+  readonly tbNum: boolean;
   readonly value: unknown;
 }
 
@@ -133,7 +136,8 @@ const STATUS_VALUES: Record<TbStatusValue, true> = {
  *
  * It does NOT sort, filter, paginate or fetch: it emits and the caller decides (DEC-0012). stickyColumns (0, 1 or 2) fixes the first columns on
  * the left; density ('default' | 'dense') compacts the rows; texts[variant].actionLabel null shows no action and message
- * accepts a list of paragraphs plus reference (D-054). No column menu, CSV, selection or pagination (PQ-2).
+ * accepts a list of paragraphs plus reference (D-054).
+ * column.mono (true) puts tb-num on the cells of that column, not the header (D-055). No column menu, CSV, selection or pagination (PQ-2).
  */
 @Component({
   selector: 'tb-data-table',
@@ -246,7 +250,7 @@ const STATUS_VALUES: Record<TbStatusValue, true> = {
                 (keydown.space)="onRowKey(item.row, $event)"
               >
                 @for (cell of item.cells; track cell.id) {
-                  <div role="cell" class="cellt" [class.num]="cell.num" [class.r]="cell.num" [class.m]="cell.mono" [class.mute]="cell.mute">
+                  <div role="cell" class="cellt" [class.num]="cell.num" [class.r]="cell.num" [class.m]="cell.mono" [class.tb-num]="cell.tbNum" [class.mute]="cell.mute">
                     @if (customCell(cell.id); as def) {
                       <ng-container *ngTemplateOutlet="def.template; context: { $implicit: item.row, value: cell.value }" />
                     } @else if (cell.status) {
@@ -301,6 +305,7 @@ const STATUS_VALUES: Record<TbStatusValue, true> = {
     .tb-row.act:focus-visible::before { content: ""; position: absolute; left: 0; top: 6px; bottom: 6px; width: 2px; border-radius: 2px; background: var(--color-focus); }
     .cellt { font: 400 13px/18px var(--font-sans); color: var(--color-ink-2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .cellt.m { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+    .tb-dt .tb-num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
     .cellt.r { text-align: right; }
     .cellt.mute { color: var(--color-ink-muted); }
     .tb-dt-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-4); padding: 10px var(--spacing-4); border-top: 1px solid var(--color-line); font: 400 12px/16px var(--font-sans); color: var(--color-ink-muted); }
@@ -458,7 +463,7 @@ export class TbDataTable<T = any> {
   private cellOf(column: TbColumn<T>, row: T): CellView {
     const value = column.value(row);
     const num = this.isNumeric(column);
-    const base = { id: column.id, value, num, mono: num, status: null, mute: false };
+    const base = { id: column.id, value, num, mono: num, tbNum: column.mono === true, status: null, mute: false };
     if (value === null || value === undefined || value === '') {
       return { ...base, text: NULL_DISPLAY, mute: true };
     }

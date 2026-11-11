@@ -146,7 +146,7 @@ Salida: `selectedChange`. Con una selección inválida toma la primera y lo emit
 | Entrada | Valores |
 |---|---|
 | `title` | título de la tarjeta y nombre accesible de la tabla |
-| `columns` | `{ id, header, type, value: (row) => …, cents?, sortable?, track? }`. `type`: `text`, `money`, `quantity`, `percent`, `date`, `status`. Dinero, cantidad y porcentaje van a la derecha. `track` es la pista de la rejilla (por defecto `minmax(0,1fr)`) |
+| `columns` | `{ id, header, type, value: (row) => …, cents?, sortable?, track?, mono? }`. `type`: `text`, `money`, `quantity`, `percent`, `date`, `status`. Dinero, cantidad y porcentaje van a la derecha. `track` es la pista de la rejilla (por defecto `minmax(0,1fr)`). `mono: true` pone la clase `tb-num` (mono y cifras tabulares) en las celdas de la columna, no en el encabezado; el valor se muestra como texto y el vacío sigue en «—» (D-055) |
 | `rows`, `rowKey` | filas y su clave única |
 | `state` | `loading`, `ready`, `error`, `offline`, `forbidden` |
 | `sort` | `{ columnId, direction }` o `null` |
