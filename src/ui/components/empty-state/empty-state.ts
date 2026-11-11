@@ -33,6 +33,8 @@ const VARIANTS: Record<
  *
  * Inputs: variant (empty, no-results, forbidden, offline, error), heading, message, actionLabel,
  * focusActionOnShow (the action takes the focus when it appears; only when the person just triggered the load).
+ * actionLabel null: no action and no secondary (D-054). message: a text or a list of texts, one <p> each. reference: last
+ * <p> "Referencia: id" with the id in .tb-num; not painted when empty (D-054).
  * Default action: no-results -> "Limpiar filtros", offline and error -> "Reintentar", the others none.
  * actionVariant: 'default' (tb-btn, as in 004) or 'primary' (tb-btn primary). secondaryActionLabel: a ghost tb-btn after the
  * primary in the same .acts row; it is not painted without a primary action (D-052).
@@ -56,7 +58,12 @@ const VARIANTS: Record<
   template: `
     <span class="ico"><tb-icon [name]="icon()" [size]="20" /></span>
     <b>{{ heading() }}</b>
-    <p>{{ message() }}</p>
+    @for (paragraph of paragraphs(); track $index) {
+      <p>{{ paragraph }}</p>
+    }
+    @if (reference(); as id) {
+      <p>Referencia: <span class="tb-num">{{ id }}</span></p>
+    }
     @if (label(); as text) {
       <div class="acts">
         <button tb-button #actionButton [variant]="actionVariant() === 'primary' ? 'primary' : 'secondary'" (click)="action.emit()">{{ text }}</button>
@@ -71,6 +78,7 @@ const VARIANTS: Record<
     .tb-empty .ico { width: 40px; height: 40px; border-radius: var(--radius-lg); display: grid; place-items: center; background: var(--color-surface-hover); color: var(--color-ink-muted); margin-bottom: var(--spacing-1); }
     .tb-empty b { font: 600 14px/20px var(--font-sans); color: var(--color-ink); }
     .tb-empty p { margin: 0; max-width: 44ch; font: 400 13px/19px var(--font-sans); }
+    .tb-empty .tb-num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
     .tb-empty .acts { margin-top: var(--spacing-3); display: flex; gap: var(--spacing-2); flex-wrap: wrap; justify-content: center; }
     .tb-empty.err .ico { background: var(--color-bad-soft); color: var(--color-bad); }
     .tb-empty.lock .ico, .tb-empty.off .ico { background: var(--color-corr-soft); color: var(--color-corr); }
@@ -79,8 +87,9 @@ const VARIANTS: Record<
 export class TbEmptyState {
   readonly variant = input.required<TbEmptyVariant>();
   readonly heading = input.required<string>();
-  readonly message = input.required<string>();
-  readonly actionLabel = input<string | undefined>(undefined);
+  readonly message = input.required<string | readonly string[]>();
+  readonly reference = input<string | undefined>(undefined);
+  readonly actionLabel = input<string | null | undefined>(undefined);
   readonly actionVariant = input<TbEmptyActionVariant>('default');
   readonly secondaryActionLabel = input<string | undefined>(undefined);
   readonly focusActionOnShow = input(false, { transform: booleanAttribute });
@@ -91,7 +100,15 @@ export class TbEmptyState {
 
   protected readonly icon = computed(() => VARIANTS[this.variant()].icon);
   protected readonly role = computed(() => VARIANTS[this.variant()].role);
-  protected readonly label = computed(() => this.actionLabel() || VARIANTS[this.variant()].defaultAction);
+  protected readonly paragraphs = computed<readonly string[]>(() => {
+    const message = this.message();
+    return typeof message === 'string' ? [message] : message;
+  });
+  /** null means no action; undefined or an empty text means the default action of the variant. */
+  protected readonly label = computed(() => {
+    const label = this.actionLabel();
+    return label === null ? null : label || VARIANTS[this.variant()].defaultAction;
+  });
 
   constructor() {
     afterRenderEffect(() => {

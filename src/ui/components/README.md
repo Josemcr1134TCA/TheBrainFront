@@ -83,8 +83,9 @@ Con «reducir movimiento» el brillo se detiene. Los tiempos (no aparece antes d
 | Entrada | Valores |
 |---|---|
 | `variant` | `empty`, `no-results`, `forbidden`, `offline`, `error` |
-| `heading`, `message` | título y una frase |
-| `actionLabel` | texto de la acción. Por defecto: `no-results` → «Limpiar filtros»; `offline` y `error` → «Reintentar»; los demás, ninguna |
+| `heading`, `message` | título y el mensaje: un texto o una lista de textos, un párrafo por elemento |
+| `reference` | identificador que se pinta al final como «Referencia: id», con el id en `tb-num`. Vacío, no se pinta |
+| `actionLabel` | texto de la acción. `null`: sin acción ni secundaria. Sin valor o vacío: la acción por defecto (D-054). Por defecto: `no-results` → «Limpiar filtros»; `offline` y `error` → «Reintentar»; los demás, ninguna |
 | `focusActionOnShow` | el botón toma el foco al aparecer; solo si la persona acaba de disparar la carga |
 
 Salida: `action()`. Como máximo una acción. Rol: `alert` en `error` y `offline`; `status` en `empty`, `no-results` y `forbidden`.
@@ -154,8 +155,10 @@ Salida: `selectedChange`. Con una selección inválida toma la primera y lo emit
 | `itemLabel` | `{ one, other }` para el pie y el anuncio: «1 producto», «41 productos» |
 | `count`, `note` | total del pie (por defecto, `rows.length`) y nota a la derecha |
 | `loadingLabel` | nombre accesible mientras carga |
-| `texts` | un objeto por variante: `{ heading, message, actionLabel? }` para `empty`, `no-results`, `forbidden`, `offline` y `error` |
+| `texts` | un objeto por variante: `{ heading, message, reference?, actionLabel?, actionVariant?, secondaryActionLabel? }`; `message` acepta una lista de textos y `actionLabel: null` quita la acción (D-054). Variantes: `empty`, `no-results`, `forbidden`, `offline` y `error` |
 | `rowsActivatable` | las filas se activan con clic, `Enter` o `Espacio` |
+| `stickyColumns` | `0` (por defecto), `1` o `2`: fija las primeras columnas a la izquierda al desplazar (clases `stick1` y `stick2` del kit). Con `2`, si la primera `track` está en px, `--stick2` es ese ancho más el espacio entre columnas; si no, se usa 68px (D-054) |
+| `density` | `default` (filas de 56 px) o `dense` (44 px, clase `dense` del kit) (D-054) |
 
 Salidas: `sortChange`, `searchChange` (en cada tecla, sin *debounce*), `clearFilters`, `retry`, `loadTimeout`, `rowActivate` y `emptyAction`. Los `FilterSelect` se proyectan dentro de la tabla y las acciones de la cabecera llevan el atributo `tbActions`.
 

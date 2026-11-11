@@ -48,8 +48,12 @@ export interface TbColumn<T = any> {
 /** Heading, message and optional action label of one EmptyState variant. */
 export interface TbTableText {
   readonly heading: string;
-  readonly message: string;
-  readonly actionLabel?: string;
+  /** A text or a list of texts, one paragraph each. */
+  readonly message: string | readonly string[];
+  /** Identifier painted last as "Referencia: id". */
+  readonly reference?: string;
+  /** null: no action and no secondary, not even in error or offline. */
+  readonly actionLabel?: string | null;
   /** 'primary' paints the action as tb-btn primary; by default it is the 004 button. */
   readonly actionVariant?: TbEmptyActionVariant;
   /** Ghost action after the primary one; it emits secondaryAction with the variant. */
@@ -127,8 +131,9 @@ const STATUS_VALUES: Record<TbStatusValue, true> = {
  * invisible role="status" region announces the count when rows are shown.
  * The action of an EmptyState emits retry (error and offline), clearFilters (no-results) or emptyAction (the others).
  *
- * It does NOT sort, filter, paginate or fetch: it emits and the caller decides (DEC-0012). No column menu, CSV, pinned
- * columns, density, selection or pagination (PQ-2).
+ * It does NOT sort, filter, paginate or fetch: it emits and the caller decides (DEC-0012). stickyColumns (0, 1 or 2) fixes the first columns on
+ * the left; density ('default' | 'dense') compacts the rows; texts[variant].actionLabel null shows no action and message
+ * accepts a list of paragraphs plus reference (D-054). No column menu, CSV, selection or pagination (PQ-2).
  */
 @Component({
   selector: 'tb-data-table',
@@ -181,6 +186,7 @@ const STATUS_VALUES: Record<TbStatusValue, true> = {
               [variant]="emptyVariant()"
               [heading]="text.heading"
               [message]="text.message"
+              [reference]="text.reference"
               [actionLabel]="text.actionLabel"
               [actionVariant]="text.actionVariant ?? 'default'"
               [secondaryActionLabel]="text.secondaryActionLabel"
@@ -204,8 +210,8 @@ const STATUS_VALUES: Record<TbStatusValue, true> = {
     <div class="tb-sr" role="status">{{ announcement() }}</div>
 
     <ng-template #grid>
-      <div class="tb-hscroll">
-        <div role="table" class="tb-list" [attr.aria-label]="title() || null">
+      <div class="tb-hscroll" [class.stick1]="stickyColumns() >= 1" [class.stick2]="stickyColumns() === 2" [style.--stick2]="stick2()">
+        <div role="table" class="tb-list" [class.dense]="density() === 'dense'" [attr.aria-label]="title() || null">
           <div role="row" class="tb-head-row" [style.--cols]="cols()">
             @for (column of columns(); track column.id) {
               <div
@@ -269,6 +275,13 @@ const STATUS_VALUES: Record<TbStatusValue, true> = {
     .tb-find input { all: unset; flex: 1; min-width: 0; font: 400 13px/1 var(--font-sans); color: var(--color-ink); }
     .tb-find input::placeholder { color: var(--color-ink-muted); }
     .tb-hscroll { overflow-x: auto; }
+    .tb-hscroll.stick1 > div, .tb-hscroll.stick2 > div { min-width: max-content; }
+    .tb-hscroll .tb-head-row { position: static; }
+    .tb-hscroll.stick1 .tb-row > :nth-child(1), .tb-hscroll.stick1 .tb-head-row > :nth-child(1) { position: sticky; left: 0; z-index: 2; background: var(--color-surface); }
+    .tb-hscroll.stick2 .tb-row > :nth-child(2), .tb-hscroll.stick2 .tb-head-row > :nth-child(2) { position: sticky; left: var(--stick2, 68px); z-index: 2; background: var(--color-surface); box-shadow: 1px 0 0 var(--color-line); }
+    .tb-hscroll.stick1:not(.stick2) .tb-row > :nth-child(1), .tb-hscroll.stick1:not(.stick2) .tb-head-row > :nth-child(1) { box-shadow: 1px 0 0 var(--color-line); }
+    .tb-hscroll.stick1 .tb-row:hover > :nth-child(1), .tb-hscroll.stick2 .tb-row:hover > :nth-child(2) { background: var(--color-surface-hover); }
+    @media (max-width: 760px) { .tb-hscroll .tb-row > :nth-child(1), .tb-hscroll .tb-row > :nth-child(2), .tb-hscroll .tb-head-row > :nth-child(1), .tb-hscroll .tb-head-row > :nth-child(2) { position: static; box-shadow: none; } }
     .tb-head-row, .tb-row { display: grid; grid-template-columns: var(--cols); align-items: center; column-gap: var(--spacing-3); padding: 0 var(--spacing-4); }
     .tb-head-row { height: 36px; font: 500 12px/16px var(--font-sans); color: var(--color-ink-muted); border-bottom: 1px solid var(--color-line); }
     .tb-head-row > * { position: relative; min-width: 0; white-space: nowrap; }
@@ -281,6 +294,7 @@ const STATUS_VALUES: Record<TbStatusValue, true> = {
     .tb-head-row [aria-sort] .th { color: var(--color-ink); }
     .tb-head-row .th.r { justify-content: flex-end; }
     .tb-row { position: relative; min-height: var(--size-row); padding-top: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--color-line); outline: none; transition: background-color var(--motion-duration-fast) ease; }
+    .tb-list.dense .tb-row { min-height: 44px; padding-top: 6px; padding-bottom: 6px; }
     .tb-list > .tb-row:last-child { border-bottom: 0; }
     .tb-row.act { cursor: pointer; }
     .tb-row.act:hover { background: var(--color-surface-hover); }
@@ -314,6 +328,8 @@ export class TbDataTable<T = any> {
   readonly loadingLabel = input.required<string>();
   readonly texts = input.required<TbTableTexts>();
   readonly rowsActivatable = input(false, { transform: booleanAttribute });
+  readonly stickyColumns = input<0 | 1 | 2>(0);
+  readonly density = input<'default' | 'dense'>('default');
 
   readonly sortChange = output<TbSort>();
   readonly searchChange = output<string>();
@@ -359,6 +375,13 @@ export class TbDataTable<T = any> {
       .map((c) => c.track ?? 'minmax(0,1fr)')
       .join(' '),
   );
+
+  /** With two fixed columns: width of the first (when it is in px) plus the column gap; otherwise the kit fallback applies. */
+  protected readonly stick2 = computed(() => {
+    if (this.stickyColumns() !== 2) return null;
+    const track = this.columns()[0]?.track?.trim() ?? '';
+    return /^\d+(\.\d+)?px$/.test(track) ? `calc(${track} + var(--spacing-3))` : null;
+  });
 
   protected readonly view = computed<readonly RowView<T>[]>(() => {
     const columns = this.columns();
