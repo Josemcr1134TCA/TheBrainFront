@@ -6,6 +6,9 @@
 // fails closed (missing artifact, bad arguments, symlinks, unreadable files) and passes a clean artifact.
 // [EP00-TBR-002-CA3] R3: the mandatory minimum of the list is copied here on purpose. Emptying the list means
 // editing this file too, and that shows in the diff. Each minimum rule is also planted in a fake dist.
+// [EP00-TBR-002-CA3] T3 (after reading T2) pins the dev rules of docs/estado/EP00-TBR-002.md: (1) each finding is
+// { rule, path, line, sample }, findings go to stderr, the exit code is 1 and N counts only files; (2) in exceptions
+// "*" does not cross "/", "**" does and paths are case sensitive, while forbidden names ignore case.
 // [EP00-TBR-002-CA1] package.json has typecheck (R1) plus ci:test and artifact:check with the exact text of §8.6.
 // Synthetic secrets are assembled at runtime so no key-like string is committed (RG-4). No real data.
 // Fixtures live under tmp/ (ignored by git) and are removed afterwards.
@@ -13,7 +16,7 @@
 import { after, describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, rmdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, rmdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -40,6 +43,10 @@ const MINIMUM = {
   ],
 };
 const MINIMUM_IDS = [...MINIMUM.names, ...MINIMUM.contents].map((r) => r.id);
+// Exceptions of a list that touch a rule of the minimum. The validator accepts them on content rules (design §8.3);
+// this test rejects them in the real list, so weakening the minimum means editing this file too (R3).
+const minimumExceptionHits = (list) =>
+  (Array.isArray(list?.exceptions) ? list.exceptions : []).filter((e) => MINIMUM_IDS.includes(e?.rule)).map((e) => `${e.rule} → ${e.path}`);
 
 // ---------------------------------------------------------------------------------------------
 // Synthetic triggers, assembled at runtime (nothing key-like is committed).
@@ -141,13 +148,16 @@ function names(output, path, id, line) {
   return output.split("\n").some((l) => pathRe.test(l) && l.includes(id));
 }
 
-// A failing review: exit != 0, not a crash, a summary and the expected path + id on one line.
+// A failing review (dev rule 1): exit code 1, not a crash, the finding (path + id on one line) and the summary on
+// stderr, and nothing that says the artifact is ready.
 function assertFinding(r, path, id, line) {
-  assert.notEqual(r.status, 0, `se esperaba un código distinto de 0 por ${id} en ${path}\n${r.output}`);
+  assert.equal(r.status, 1, `se esperaba el código 1 por ${id} en ${path}\n${r.output}`);
   assert.doesNotMatch(r.output, STACK_TRACE_RE, `la revisión no debe terminar con una traza\n${r.output}`);
-  assert.ok(names(r.output, path, id, line), `la salida debe nombrar ${path}${line ? `:${line}` : ""} y ${id} en una línea\n${r.output}`);
-  assert.match(r.output, SUMMARY_RE, `falta el resumen «check-artifact: N hallazgo(s)…»\n${r.output}`);
+  assert.ok(names(r.stderr, path, id, line), `stderr debe nombrar ${path}${line ? `:${line}` : ""} y ${id} en una línea\nstderr: ${r.stderr}`);
+  assert.match(r.stderr, SUMMARY_RE, `falta en stderr el resumen «check-artifact: N hallazgo(s)…»\nstderr: ${r.stderr}`);
+  assert.doesNotMatch(r.output, /listo para subir/, `un artefacto con hallazgos nunca está listo para subir\n${r.output}`);
 }
+const SUMMARY_FILES_RE = /check-artifact: \d+ hallazgo\(s\) en (\d+) archivo\(s\)/;
 
 // ---------------------------------------------------------------------------------------------
 // Module API. Importing is first probed in a child: a missing guard must not run the review here.
@@ -206,6 +216,13 @@ describe("[EP00-TBR-002-CA3] self-checks of the test helpers", () => {
     assert.ok(!names(SAMPLE_OUTPUT, "browser/vercel.json", "netlify-config"), "la ruta y el id deben ir en la misma línea");
   });
 
+  test("[EP00-TBR-002-CA3] minimumExceptionHits() catches an exception that tries to cover a rule of the minimum", () => {
+    const ex = (rule) => ({ rule, path: "browser/vendor-*.js", reason: "caso sintético", decision: "DEC-0000" });
+    assert.deepEqual(minimumExceptionHits({ exceptions: [ex("private-key-block"), ex("github-token"), ex("service-role-jwt")] }), ["private-key-block → browser/vendor-*.js", "service-role-jwt → browser/vendor-*.js"]);
+    assert.deepEqual(minimumExceptionHits({ exceptions: [ex("github-token")] }), []);
+    assert.deepEqual(minimumExceptionHits({}), []);
+  });
+
   test("[EP00-TBR-002-CA3] the summary patterns read the format of §8.3", () => {
     assert.equal(Number(SUMMARY_RE.exec(SAMPLE_OUTPUT)?.[1]), 4);
     assert.equal(Number(CLEAN_RE.exec("check-artifact: 0 hallazgos en 4 archivo(s) de tmp/artifact-ab; listo para subir")?.[1]), 4);
@@ -240,9 +257,24 @@ describe("[EP00-TBR-002-CA3] check-artifact passes a clean artifact", () => {
     const dir = makeArtifact();
     const r = scan(dir);
     assert.equal(r.status, 0, `un artefacto limpio debe pasar\n${r.output}`);
-    const m = CLEAN_RE.exec(r.output);
-    assert.ok(m, `falta «check-artifact: 0 hallazgos en N archivo(s) de <dir>; listo para subir»\n${r.output}`);
+    const m = CLEAN_RE.exec(r.stdout);
+    assert.ok(m, `falta en stdout «check-artifact: 0 hallazgos en N archivo(s) de <dir>; listo para subir»\n${r.output}`);
     assert.equal(Number(m[1]), Object.keys(files).length, `el conteo de archivos revisados no coincide\n${r.output}`);
+    assert.doesNotMatch(r.stderr, /ERROR|hallazgo\(s\)/, `un artefacto limpio no escribe hallazgos en stderr\nstderr: ${r.stderr}`);
+  });
+
+  // Dev rule 1: N counts only files, never folders (empty, nested or hidden).
+  test("[EP00-TBR-002-CA3] counts only files in N, not folders", () => {
+    const extra = { "browser/assets/": "", "browser/assets/i18n/": "", "browser/.well-known/": "", "browser/media/a/b/logo.svg": "<svg/>\n" };
+    const r = scan(makeArtifact(extra));
+    assert.equal(r.status, 0, r.output);
+    assert.equal(Number(CLEAN_RE.exec(r.stdout)?.[1]), Object.keys(CLEAN_FILES()).length + 1, `N debe contar solo archivos\n${r.output}`);
+  });
+
+  test("[EP00-TBR-002-CA3] counts only files in N when there are findings", () => {
+    const r = scan(makeArtifact({ "browser/.vercel/project.json": "{}\n", "browser/assets/": "" }));
+    assertFinding(r, "browser/.vercel", "vercel-dir");
+    assert.equal(Number(SUMMARY_FILES_RE.exec(r.stderr)?.[1]), Object.keys(CLEAN_FILES()).length + 1, `N debe contar solo archivos\nstderr: ${r.stderr}`);
   });
 });
 
@@ -266,6 +298,21 @@ describe("[EP00-TBR-002-CA3] forbidden names (mandatory minimum)", () => {
   ];
   for (const [title, planted, path, id] of VARIANTS) {
     test(`[EP00-TBR-002-CA3] fails on vercel.json ${title}`, () => {
+      assertFinding(scan(makeArtifact(planted)), path, id);
+    });
+  }
+
+  // Dev rule 2: forbidden names do not distinguish upper and lower case, also with a "*" in the rule.
+  const CASE_VARIANTS = [
+    [".ENV at the root", { ".ENV": "A=1\n" }, ".ENV", "env-file"],
+    ["NETLIFY.TOML", { "browser/NETLIFY.TOML": "[build]\n" }, "browser/NETLIFY.TOML", "netlify-config"],
+    ["Firebase.Json", { "browser/assets/Firebase.Json": "{}\n" }, "browser/assets/Firebase.Json", "firebase-config"],
+    ["a .VERCEL/ folder", { "browser/.VERCEL/project.json": "{}\n" }, "browser/.VERCEL", "vercel-dir"],
+    ["WRANGLER.TOML (rule with *)", { "browser/WRANGLER.TOML": "name='x'\n" }, "browser/WRANGLER.TOML", "cloudflare-wrangler"],
+    ["Cert.PEM (rule with *)", { "browser/assets/Cert.PEM": "x\n" }, "browser/assets/Cert.PEM", "pem-file"],
+  ];
+  for (const [title, planted, path, id] of CASE_VARIANTS) {
+    test(`[EP00-TBR-002-CA3] forbidden names ignore case: fails on ${title}`, () => {
       assertFinding(scan(makeArtifact(planted)), path, id);
     });
   }
@@ -316,6 +363,18 @@ describe("[EP00-TBR-002-CA3] forbidden contents (mandatory minimum)", () => {
     assertFinding(r, "browser/.cache/blob.txt", "postgres-url-with-password", 1);
   });
 
+  test("[EP00-TBR-002-CA3] counts lines right with CRLF line endings", () => {
+    const r = scan(makeArtifact({ "browser/assets/notes.txt": `one\r\ntwo\r\n${triggerOf("postgres-url-with-password")}\r\n` }));
+    assertFinding(r, "browser/assets/notes.txt", "postgres-url-with-password", 3);
+  });
+
+  test("[EP00-TBR-002-CA3] finds a secret at the end of a 20 MB one-line minified bundle", () => {
+    const secret = triggerOf("supabase-secret-key");
+    const r = scan(makeArtifact({ "browser/chunk-SYNTH0002.js": `${"var a=1;".repeat(2_500_000)}const k="${secret}";` }));
+    assertFinding(r, "browser/chunk-SYNTH0002.js", "supabase-secret-key", 1);
+    assert.deepEqual(leakedPieces(r.output, secret), [], "la salida no muestra el secreto");
+  });
+
   test("[EP00-TBR-002-CA3] reviews contents of binary files", () => {
     const bytes = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0xff]), Buffer.from(`\n${triggerOf("service-role-jwt")}\n`), Buffer.from([0, 1, 2])]);
     const r = scan(makeArtifact({ "browser/media/logo.png": bytes }));
@@ -332,9 +391,8 @@ describe("[EP00-TBR-002-CA3] check-artifact fails closed", () => {
   for (const [title, dirOf] of MISSING_CASES) {
     test(`[EP00-TBR-002-CA3] fails with a Spanish message and no stack trace on ${title}`, () => {
       const r = scan(dirOf());
-      assert.notEqual(r.status, 0, `un artefacto ausente o vacío nunca pasa\n${r.output}`);
-      assert.match(r.output, /No existe el artefacto en /, `falta «No existe el artefacto en <dir>; corre npm run build»\n${r.output}`);
-      assert.match(r.output, /npm run build/, r.output);
+      assert.equal(r.status, 1, `un artefacto ausente o vacío nunca pasa: código 1\n${r.output}`);
+      assert.match(r.stderr, /No existe el artefacto en .+; corre npm run build/, `falta en stderr «No existe el artefacto en <dir>; corre npm run build»\n${r.output}`);
       assert.doesNotMatch(r.output, STACK_TRACE_RE, `no debe terminar con una traza\n${r.output}`);
       assert.doesNotMatch(r.output, /listo para subir/, r.output);
     });
@@ -351,11 +409,50 @@ describe("[EP00-TBR-002-CA3] check-artifact fails closed", () => {
   for (const [title, argsOf] of USAGE_CASES) {
     test(`[EP00-TBR-002-CA3] rejects ${title} with usage on stderr and reviews nothing`, () => {
       const r = check(argsOf());
-      assert.notEqual(r.status, 0, `debe rechazar los argumentos\n${r.output}`);
+      assert.equal(r.status, 1, `debe rechazar los argumentos con el código 1\n${r.output}`);
       assert.match(r.stderr, /--dir/, `stderr debe mostrar el uso (con --dir)\nstderr: ${r.stderr}`);
       assert.doesNotMatch(r.output, /hallazgo/, `no debe revisar nada\n${r.output}`);
       assert.doesNotMatch(r.output, /vercel-config/, `no debe revisar nada\n${r.output}`);
       assert.doesNotMatch(r.stderr, STACK_TRACE_RE, `el rechazo no debe ser una traza\n${r.stderr}`);
+    });
+  }
+
+  // The list path is fixed next to the script, so a broken list is tested on a copy of the script under tmp/:
+  // <copy>/scripts/check-artifact.mjs, <copy>/scripts/forbidden-artifact-patterns.json and the default
+  // <copy>/dist/the-brain-front/ (no --dir), dirty on purpose to prove that nothing is reviewed.
+  function copyWithList(listText) {
+    const root = makeDir("list-");
+    mkdirSync(join(root, "scripts"));
+    copyFileSync(SCRIPT, join(root, "scripts", "check-artifact.mjs"));
+    if (listText !== undefined) writeFileSync(join(root, "scripts", "forbidden-artifact-patterns.json"), listText);
+    const dist = join(root, "dist", "the-brain-front");
+    for (const [path, content] of Object.entries({ ...CLEAN_FILES(), "browser/vercel.json": "{}\n" })) {
+      mkdirSync(dirname(join(dist, path)), { recursive: true });
+      writeFileSync(join(dist, path), content);
+    }
+    const r = spawnSync(process.execPath, [join(root, "scripts", "check-artifact.mjs")], { cwd: root, encoding: "utf8", timeout: CHILD_TIMEOUT_MS, killSignal: "SIGKILL" });
+    return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "", output: `${r.stdout ?? ""}\n${r.stderr ?? ""}` };
+  }
+
+  test("[EP00-TBR-002-CA3] the copy with the real list reviews the default dist/the-brain-front/ (control)", () => {
+    assert.ok(existsSync(SCRIPT), "no existe el script scripts/check-artifact.mjs");
+    assertFinding(copyWithList(readFileSync(LIST, "utf8")), "browser/vercel.json", "vercel-config");
+  });
+
+  const BAD_LISTS = [
+    ["a missing list", undefined],
+    ["a list that is not JSON", "{ names: [ "],
+    ["a list with empty names", JSON.stringify({ ...listForTitles, names: [] })],
+    ["a list with an exception on a name rule", JSON.stringify({ ...listForTitles, exceptions: [{ rule: "vercel-config", path: "browser/vercel.json", reason: "caso sintético", decision: "DEC-0000" }] })],
+  ];
+  for (const [title, listText] of BAD_LISTS) {
+    test(`[EP00-TBR-002-CA3] fails with exit code 1 on ${title} and reviews nothing`, () => {
+      assert.ok(existsSync(SCRIPT), "no existe el script scripts/check-artifact.mjs");
+      const r = copyWithList(listText);
+      assert.equal(r.status, 1, r.output);
+      assert.match(r.stderr, /lista de patrones prohibidos/, `stderr debe explicar en español el problema de la lista\nstderr: ${r.stderr}`);
+      assert.doesNotMatch(r.output, /vercel-config ·|hallazgo\(s\)|listo para subir/, `con una lista inválida no se revisa nada\n${r.output}`);
+      assert.doesNotMatch(r.output, STACK_TRACE_RE, r.output);
     });
   }
 
@@ -411,7 +508,7 @@ describe("[EP00-TBR-002-CA3] the real pattern list", () => {
   });
 
   test("[EP00-TBR-002-CA3] no exception weakens a rule of the mandatory minimum", () => {
-    const hits = (realList().exceptions ?? []).filter((e) => MINIMUM_IDS.includes(e.rule)).map((e) => `${e.rule} → ${e.path}`);
+    const hits = minimumExceptionHits(realList());
     assert.deepEqual(hits, [], `hay excepciones sobre reglas del mínimo: ${hits.join(", ")}`);
   });
 
@@ -465,6 +562,18 @@ describe("[EP00-TBR-002-CA3] validatePatternList rejects invalid lists", () => {
     ["an exception with path **/*", (l) => { l.exceptions = [exception({ path: "**/*" })]; }],
     ["an exception without reason", (l) => { l.exceptions = [exception({ reason: undefined })]; delete l.exceptions[0].reason; }],
     ["an exception without decision", (l) => { l.exceptions = [exception({ decision: undefined })]; delete l.exceptions[0].decision; }],
+    ["an exception with path */**", (l) => { l.exceptions = [exception({ path: "*/**" })]; }],
+    ["an exception with path **/**", (l) => { l.exceptions = [exception({ path: "**/**" })]; }],
+    ["an exception with path ** wrapped in spaces", (l) => { l.exceptions = [exception({ path: " ** " })]; }],
+    ["an exception with an empty path", (l) => { l.exceptions = [exception({ path: "" })]; }],
+    ["an exception with an empty decision", (l) => { l.exceptions = [exception({ decision: " " })]; }],
+    ["an exception that is not an object", (l) => { l.exceptions = ["private-key-block"]; }],
+    ["exceptions that are not an array", (l) => { l.exceptions = { rule: "private-key-block" }; }],
+    ["an exception on a name rule of the minimum (env-file)", (l) => { l.names.push({ id: "env-file", kind: "file", name: ".env", reason: "archivo de entorno" }); l.exceptions = [exception({ rule: "env-file", path: "browser/.env" })]; }],
+    ["a jwt-role rule without role", (l) => { delete l.contents[1].role; }],
+    ["a regex rule without pattern", (l) => { delete l.contents[0].pattern; }],
+    ["a name rule without name", (l) => { delete l.names[0].name; }],
+    ["an empty list object", (l) => { Object.keys(l).forEach((k) => delete l[k]); }],
   ];
   for (const [title, breakList] of INVALID) {
     test(`[EP00-TBR-002-CA3] reports ${title}`, () => {
@@ -495,6 +604,73 @@ describe("[EP00-TBR-002-CA3] module API", () => {
     assert.equal(clean.length, 0, `un artefacto limpio no tiene hallazgos: ${JSON.stringify(clean)}`);
     const dirty = scanArtifact(makeArtifact({ "browser/vercel.json": "{}\n" }), list);
     assert.ok(dirty.length >= 1 && JSON.stringify(dirty).includes("vercel-config"), `se esperaba vercel-config: ${JSON.stringify(dirty)}`);
+  });
+
+  // Dev rule 1: every finding is exactly { rule, path, line, sample }.
+  test("[EP00-TBR-002-CA3] scanArtifact returns findings shaped { rule, path, line, sample } and never the full secret", () => {
+    const scanArtifact = exported("scanArtifact");
+    const list = exported("loadPatternList")(LIST);
+    const secret = triggerOf("service-role-jwt");
+    const findings = scanArtifact(makeArtifact({ "browser/assets/vercel.json": "{}\n", [MAIN_JS]: `/* synthetic */\nconst k="${secret}";\n` }), list);
+    assert.ok(Array.isArray(findings) && findings.length === 2, `se esperaban 2 hallazgos: ${JSON.stringify(findings)}`);
+    for (const f of findings) {
+      assert.deepEqual(Object.keys(f).sort(), ["line", "path", "rule", "sample"], `forma del hallazgo: ${JSON.stringify(f)}`);
+      assert.equal(typeof f.rule, "string");
+      assert.equal(typeof f.path, "string");
+      assert.equal(typeof f.sample, "string");
+      assert.ok(Number.isInteger(f.line) && f.line >= 0, `line debe ser un entero ≥ 0: ${JSON.stringify(f)}`);
+      assert.ok(!f.path.startsWith("/") && !f.path.includes("\\") && !f.path.includes(TMP), `path debe ser relativo a <dir> y con «/»: ${f.path}`);
+    }
+    const name = findings.find((f) => f.rule === "vercel-config");
+    assert.equal(name?.path, "browser/assets/vercel.json", JSON.stringify(findings));
+    const content = findings.find((f) => f.rule === "service-role-jwt");
+    assert.equal(content?.path, MAIN_JS, JSON.stringify(findings));
+    assert.equal(content?.line, 2, JSON.stringify(findings));
+    assert.deepEqual(leakedPieces(JSON.stringify(findings), secret), [], "sample no puede mostrar el secreto");
+  });
+
+  // Dev rule 2 on exceptions: "*" does not cross "/", "**" does, and paths are case sensitive.
+  const withException = (path, rule = "postgres-url-with-password") => {
+    const list = structuredClone(exported("loadPatternList")(LIST));
+    list.exceptions = [{ rule, path, reason: "caso sintético", decision: "DEC-0000" }];
+    assert.deepEqual(exported("validatePatternList")(list), [], `la excepción sintética ${path} debe ser válida`);
+    return list;
+  };
+  // One artifact per path: on a case-insensitive disk (macOS) Vendor-1.js and vendor-1.js would be the same file.
+  const exemptedPaths = (list, paths, body = `const u="${triggerOf("postgres-url-with-password")}";\n`) =>
+    paths.filter((p) => !exported("scanArtifact")(makeArtifact({ [p]: body }), list).some((f) => f.path === p));
+  const EXCEPTION_SEMANTICS = [
+    ["* does not cross /", "browser/*.js", ["browser/vendor-1.js"], ["browser/lazy/vendor-1.js"]],
+    ["* inside a hashed name does not cross /", "browser/vendor-*.js", ["browser/vendor-SYNTH.js"], ["browser/vendor-x/y.js"]],
+    ["** crosses folders", "browser/vendor/**", ["browser/vendor/a.js", "browser/vendor/a/b/c.js"], ["browser/other/a.js", "browser/main-SYNTH0001.js"]],
+    ["**/ crosses folders before a name", "browser/**/vendor-*.js", ["browser/a/vendor-1.js", "browser/a/b/vendor-2.js"], ["browser/a/main-1.js"]],
+    ["paths are case sensitive", "browser/Vendor-*.js", ["browser/Vendor-1.js"], ["browser/vendor-1.js", "browser/VENDOR-1.js"]],
+  ];
+  for (const [title, path, exempt, kept] of EXCEPTION_SEMANTICS) {
+    test(`[EP00-TBR-002-CA3] exception paths: ${title} (${path})`, () => {
+      const list = withException(path);
+      assert.deepEqual(exemptedPaths(list, [...exempt, ...kept]).sort(), [...exempt].sort(), `${path} debe exceptuar solo ${exempt.join(", ")}`);
+    });
+  }
+
+  // Finding of this review (media): "**/" is turned into ".*" and also matches inside a name, so the exception is wider
+  // than written. Standard globstar reading: "**/" means zero or more whole folders. Marked todo until the dev decides.
+  test("[EP00-TBR-002-CA3] exception paths: **/ only spans whole folders (browser/**/vendor-*.js keeps browser/notvendor-1.js)", { todo: "hallazgo T3: «**/» no respeta el límite de carpeta; decide el dev" }, () => {
+    const list = withException("browser/**/vendor-*.js");
+    assert.deepEqual(exemptedPaths(list, ["browser/notvendor-1.js", "browser/xvendor-1.js"]), [], "«**/» no debe cubrir parte de un nombre");
+  });
+
+  test("[EP00-TBR-002-CA3] an exception exempts only its own rule in the matched file", () => {
+    const list = withException("browser/vendor-*.js");
+    const body = `const u="${triggerOf("postgres-url-with-password")}";\nconst k="${triggerOf("supabase-secret-key")}";\n`;
+    const findings = exported("scanArtifact")(makeArtifact({ "browser/vendor-SYNTH.js": body }), list);
+    assert.deepEqual(findings.map((f) => `${f.path}|${f.rule}`), ["browser/vendor-SYNTH.js|supabase-secret-key"], JSON.stringify(findings));
+  });
+
+  test("[EP00-TBR-002-CA3] an exception never covers a forbidden name, even with the same path", () => {
+    const list = withException("browser/vercel.json");
+    const findings = exported("scanArtifact")(makeArtifact({ "browser/vercel.json": `${triggerOf("postgres-url-with-password")}\n` }), list);
+    assert.ok(findings.some((f) => f.path === "browser/vercel.json" && f.rule === "vercel-config"), `vercel.json sigue siendo hallazgo: ${JSON.stringify(findings)}`);
   });
 
   test("[EP00-TBR-002-CA3] an exception exempts only the files its path matches", () => {
