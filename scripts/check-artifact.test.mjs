@@ -295,6 +295,27 @@ describe("[EP00-TBR-002-CA3] self-checks of the test helpers", () => {
 });
 
 // ---------------------------------------------------------------------------------------------
+// Hostile inputs (round 1 · S1, round 2 · H-2, round 3 · N-1): only the scan is timed, never Node's start-up.
+// ---------------------------------------------------------------------------------------------
+const HOSTILE_LIMIT_MS = 2_000;
+const HOSTILE_KILL_MS = 45_000;
+// Runs scanArtifact with the real list in a child killed after `killMs` and times only the scan.
+function timedScan(dir, title, killMs = HOSTILE_KILL_MS) {
+  assert.ok(existsSync(SCRIPT), "no existe el script scripts/check-artifact.mjs");
+  const code = [
+    `const m = await import(${JSON.stringify(pathToFileURL(SCRIPT).href)});`,
+    `const list = m.loadPatternList(${JSON.stringify(LIST)});`,
+    `const t0 = performance.now();`,
+    `const findings = m.scanArtifact(${JSON.stringify(dir)}, list);`,
+    `process.stdout.write(JSON.stringify({ ms: performance.now() - t0, findings }));`,
+  ].join("\n");
+  const r = spawnSync(process.execPath, ["--input-type=module", "-e", code], { cwd: FRONT, encoding: "utf8", timeout: killMs, killSignal: "SIGKILL", maxBuffer: 64 * 1024 * 1024 });
+  if (r.status === null) assert.fail(`la revisión del archivo hostil (${title}) no terminó en ${killMs / 1000} s (señal ${r.signal}): la búsqueda no está acotada`);
+  assert.equal(r.status, 0, `scanArtifact falló con el archivo hostil (${title})\nstderr: ${r.stderr}`);
+  return JSON.parse(r.stdout);
+}
+
+// ---------------------------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------------------------
 describe("[EP00-TBR-002-CA3] check-artifact passes a clean artifact", () => {
@@ -423,25 +444,8 @@ describe("[EP00-TBR-002-CA3] forbidden contents (mandatory minimum)", () => {
   });
 
   // Round 1 · S1 (security finding): the JWT search must stay linear. ~200 KB of "eyJ" made the regex quadratic
-  // (~11 s), and a 2 MB bundle would block CI. scanArtifact runs in a child killed after HOSTILE_KILL_MS and only the
-  // scan is timed (not Node's start-up), so the 2 s bound leaves a wide margin for a slow CI runner.
-  const HOSTILE_LIMIT_MS = 2_000;
-  const HOSTILE_KILL_MS = 45_000;
-  // Runs scanArtifact with the real list in a child killed after HOSTILE_KILL_MS and times only the scan.
-  const timedScan = (dir, title) => {
-    assert.ok(existsSync(SCRIPT), "no existe el script scripts/check-artifact.mjs");
-    const code = [
-      `const m = await import(${JSON.stringify(pathToFileURL(SCRIPT).href)});`,
-      `const list = m.loadPatternList(${JSON.stringify(LIST)});`,
-      `const t0 = performance.now();`,
-      `const findings = m.scanArtifact(${JSON.stringify(dir)}, list);`,
-      `process.stdout.write(JSON.stringify({ ms: performance.now() - t0, findings }));`,
-    ].join("\n");
-    const r = spawnSync(process.execPath, ["--input-type=module", "-e", code], { cwd: FRONT, encoding: "utf8", timeout: HOSTILE_KILL_MS, killSignal: "SIGKILL", maxBuffer: 64 * 1024 * 1024 });
-    if (r.status === null) assert.fail(`la revisión del archivo hostil (${title}) no terminó en ${HOSTILE_KILL_MS / 1000} s (señal ${r.signal}): la búsqueda de JWT no está acotada`);
-    assert.equal(r.status, 0, `scanArtifact falló con el archivo hostil (${title})\nstderr: ${r.stderr}`);
-    return JSON.parse(r.stdout);
-  };
+  // (~11 s), and a 2 MB bundle would block CI. timedScan (defined at module level, see «Hostile inputs» below) runs
+  // scanArtifact in a child and times only the scan, so the 2 s bound leaves a wide margin for a slow CI runner.
   // Round 2 · H-2/Q12 adds ~2 MB of "eyJ." repeated: every dotted triple is a JWT candidate, so testing each one
   // without skipping must stay linear.
   const HOSTILE = [
@@ -715,6 +719,194 @@ describe("[EP00-TBR-002-CA3] round 2: keys glued to another word (H-3/Q13) and s
     const lines = ["/* synthetic */", ...sizes.map((n, i) => `const k${i}="${skAnt(n)}";`)];
     const findings = scanArtifact(makeArtifact({ [MAIN_JS]: `${lines.join("\n")}\n` }), list);
     assert.deepEqual(findings.map((f) => `${f.line}|${f.rule}`), sizes.map((_, i) => `${i + 2}|anthropic-api-key`), `cada sk-ant- larga debe dar un solo hallazgo, de anthropic-api-key: ${JSON.stringify(findings)}`);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Round 3 · N-1, N-2/Q16 (docs/estado/EP00-TBR-002.md, «re-revisión v2»). Written before the fix, on 8cc6fac.
+// ---------------------------------------------------------------------------------------------
+// One synthetic trigger per content rule of the real list, planted alone on its line (assembled at runtime).
+const L1_VALUE = (id) => L1_TRIGGERS.find((t) => t.id === id).value();
+const TRIGGER_BY_RULE = {
+  "private-key-block": () => pemBlock("PRIV" + "ATE"),
+  "service-role-jwt": () => triggerOf("service-role-jwt"),
+  "supabase-secret-key": () => triggerOf("supabase-secret-key"),
+  "supabase-service-role-env": () => "SUPABASE_" + "SERVICE_ROLE_KEY",
+  "vercel-token-env": () => "VERCEL_" + "TOKEN",
+  "postgres-url-with-password": () => triggerOf("postgres-url-with-password"),
+  "github-token": () => "gh" + "p_" + "SyntheticGitHubToken" + "0".repeat(16),
+  "aws-access-key-id": R2_AWS,
+  "stripe-secret-key": R2_STRIPE,
+  "slack-token": () => "xo" + "xb-" + "Synthetic" + "0".repeat(10),
+  "google-api-key": R2_GOOGLE,
+  "npm-token": () => L1_VALUE("npm-token"),
+  "anthropic-api-key": () => L1_VALUE("anthropic-api-key"),
+  "ai-provider-secret-key": () => L1_VALUE("ai-provider-secret-key"),
+};
+// N-1: hostile inputs of about 2 MB per content rule of the real list: repeated prefixes, long near misses and runs
+// with no closing. `expect` is the exact result of the hostile line alone (line 1) with the whole list. Each test also
+// plants the rule's trigger on line 2, so the review must still find it right after the hostile line.
+const BEGIN = `${DASHES}${"BEG" + "IN"} `;
+const HOSTILE_BY_RULE = {
+  "private-key-block": [
+    ["a BEGIN header followed by ~1 M words and no PRIVATE KEY", () => BEGIN + "A ".repeat(1_000_000), []],
+    ["the BEGIN header repeated", () => BEGIN.repeat(190_000), []],
+  ],
+  "service-role-jwt": [
+    ["eyJa. repeated (parts too short to hold a role)", () => "eyJa.".repeat(400_000), []],
+    ["a dotted triple with a ~2 MB payload that is not JSON", () => `eyJa.eyJ${"A".repeat(2_000_000)}.c2ln`, []],
+  ],
+  "supabase-secret-key": [
+    ["sb_secret_ with 19 characters, repeated (one short)", () => (`sb_${"secret_"}${"x".repeat(19)} `).repeat(70_000), []],
+    ["-sb_secret_ repeated (one run, one key-shaped match)", () => `-sb_${"secret_"}`.repeat(190_000), ["supabase-secret-key"]],
+  ],
+  "supabase-service-role-env": [
+    ["SUPABASE_SERVICE_ROLE_ repeated (no closing boundary)", () => `SUPABASE_${"SERVICE_ROLE_"}`.repeat(95_000), []],
+    ["SUPABASE_SERVICE_ROLE_KEYx repeated", () => ` SUPABASE_${"SERVICE_ROLE_KEY"}x`.repeat(80_000), []],
+  ],
+  "vercel-token-env": [
+    ["VERCEL_OIDC_TOKENx repeated", () => ` VERCEL_${"OIDC_TOKEN"}x`.repeat(105_000), []],
+    ["VERCEL_ repeated", () => "VERCEL_".repeat(285_000), []],
+  ],
+  "postgres-url-with-password": [
+    ["a postgres URL whose password never closes with @", () => `postgres${"://"}a:${"b:".repeat(1_000_000)}`, []],
+    ["postgresql:// repeated", () => `postgresql${"://"}`.repeat(150_000), []],
+    ["a postgres URL whose user never closes with :", () => `postgres${"://"}${"a".repeat(2_000_000)}`, []],
+  ],
+  "github-token": [
+    ["github_pat_ with 59 characters, repeated (one short)", () => (`github_${"pat_"}${"a".repeat(59)}-`).repeat(29_000), []],
+    ["ghp_ repeated", () => `gh${"p_"}`.repeat(500_000), []],
+  ],
+  "aws-access-key-id": [
+    ["AKIA repeated (only the first one has a boundary before it)", () => `AK${"IA"}`.repeat(500_000), ["aws-access-key-id"]],
+    ["AKIA with 15 characters, repeated (one short)", () => (`AK${"IA"}${"A".repeat(15)}-`).repeat(100_000), []],
+  ],
+  "stripe-secret-key": [
+    ["sk_live_ repeated", () => `sk${"_live_"}`.repeat(250_000), []],
+    ["rk_test_ with 19 characters, repeated (one short)", () => (`rk${"_test_"}${"a".repeat(19)}-`).repeat(75_000), []],
+  ],
+  "slack-token": [
+    ["xoxb- repeated (one run, one token-shaped match)", () => `xo${"xb-"}`.repeat(400_000), ["slack-token"]],
+    ["xoxb- with 9 characters, repeated (one short)", () => (` xo${"xb-"}${"a".repeat(9)}.`).repeat(130_000), []],
+  ],
+  "google-api-key": [
+    ["AIza repeated (~50 000 key-shaped matches on one line)", () => `AI${"za"}`.repeat(500_000), ["google-api-key"]],
+    ["AIza with 34 characters, repeated (one short)", () => (`AI${"za"}${"a".repeat(34)}.`).repeat(52_000), []],
+  ],
+  "npm-token": [
+    ["npm_ repeated", () => `np${"m_"}`.repeat(500_000), []],
+    ["npm_ with 35 characters, repeated (one short)", () => (`-np${"m_"}${"a".repeat(35)}_`).repeat(50_000), []],
+  ],
+  "anthropic-api-key": [
+    // Q10: "sk-ant-" plus 31 characters is not anthropic-api-key but is ai-provider-secret-key (sk- plus 35).
+    ["sk-ant- with 31 characters, repeated (Q10: ai-provider-secret-key, ~52 000 matches)", () => (`sk${"-ant-"}${"a".repeat(31)} `).repeat(52_000), ["ai-provider-secret-key"]],
+    ["sk-ant- with 24 characters, repeated", () => (`-sk${"-ant-"}${"a".repeat(24)} `).repeat(60_000), []],
+  ],
+  "ai-provider-secret-key": [
+    // N-1 (security re-review: 19.8 s with 0.5 MB). The run is one anthropic-api-key; its last "sk-" is followed by
+    // "ant-" and 28 more characters, so by Q10 it is also one ai-provider-secret-key on the same line.
+    ["sk-ant- repeated (N-1)", () => `sk${"-ant-"}`.repeat(300_000), ["anthropic-api-key", "ai-provider-secret-key"]],
+    ["sk- with 31 characters, repeated (one short)", () => (`-sk${"-"}${"a".repeat(31)}.`).repeat(55_000), []],
+  ],
+};
+// A failing hostile test fails in at most this time, even on the quadratic version (the limit itself stays 2 s).
+const R3_KILL_MS = 20_000;
+
+describe("[EP00-TBR-002-CA3] round 3 · N-1: every content rule of the real list reviews a ~2 MB hostile input in under 2 s", () => {
+  test("[EP00-TBR-002-CA3] N-1: every content rule of the real list has a trigger and hostile inputs here (a new rule must add its own)", () => {
+    const ids = (realList().contents ?? []).map((r) => r.id);
+    assert.deepEqual(ids.filter((id) => !(id in HOSTILE_BY_RULE) || !(id in TRIGGER_BY_RULE)), [], "cada regla de contenido de la lista real necesita un disparador y casos hostiles en esta prueba");
+    assert.deepEqual(Object.keys(HOSTILE_BY_RULE).filter((id) => !ids.includes(id)), [], "hay casos hostiles para reglas que ya no están en la lista");
+  });
+
+  test("[EP00-TBR-002-CA3] N-1 self-check: hostile inputs measure about 2 MB and each trigger has the shape of its rule", () => {
+    const list = realList();
+    for (const [id, cases] of Object.entries(HOSTILE_BY_RULE)) {
+      for (const [title, make] of cases) {
+        const n = make().length;
+        assert.ok(n >= 1_900_000 && n <= 2_200_000, `${id} · ${title}: mide ${n} caracteres; deben ser unos 2 MB`);
+        assert.ok(!make().includes("\n"), `${id} · ${title}: el caso hostil debe ir en una sola línea`);
+      }
+      const rule = list.contents.find((r) => r.id === id);
+      if (rule?.kind === "regex") assert.match(TRIGGER_BY_RULE[id](), new RegExp(rule.pattern, "u"), `el disparador de ${id} no tiene la forma de la regla`);
+    }
+  });
+
+  for (const [id, cases] of Object.entries(HOSTILE_BY_RULE)) {
+    for (const [title, make, expect] of cases) {
+      test(`[EP00-TBR-002-CA3] N-1: ${id} · ${title}: reviewed in under 2 s with the exact result, and the ${id} trigger on the next line is still found`, () => {
+        const path = "browser/chunk-HOSTILE.js";
+        const trigger = TRIGGER_BY_RULE[id]();
+        const dir = makeArtifact({ [path]: `${make()}\nconst k="${trigger}";\n` });
+        const { ms, findings } = timedScan(dir, `${id} · ${title}`, R3_KILL_MS);
+        const got = findings.map((f) => `${f.path}:${f.line}|${f.rule}`).sort();
+        const want = [...expect.map((r) => `${path}:1|${r}`), `${path}:2|${id}`].sort();
+        assert.deepEqual(got, want, `${id} · ${title}: el resultado debe ser exacto: ${JSON.stringify(findings)}`);
+        assert.deepEqual(leakedPieces(JSON.stringify(findings), trigger), [], "sample no puede mostrar el secreto");
+        assert.ok(ms < HOSTILE_LIMIT_MS, `${id} · ${title}: la revisión tardó ${Math.round(ms)} ms; el límite es ${HOSTILE_LIMIT_MS} ms`);
+      });
+    }
+  }
+
+  // Every match used to cost a count of the lines before it, so ~50 000 matches in 2 MB grow as matches × size. One
+  // finding per rule and line stays the result; the time must stay linear for every rule at once.
+  test("[EP00-TBR-002-CA3] N-1: ~2 MB of every trigger repeated on one line gives one finding per content rule, in under 2 s", () => {
+    const path = "browser/chunk-DENSE.js";
+    const ids = realList().contents.map((r) => r.id);
+    const header = pemBlock("PRIV" + "ATE").split("\n")[0];
+    const unit = `${ids.map((id) => (id === "private-key-block" ? header : TRIGGER_BY_RULE[id]())).join(" ")} `;
+    const line = unit.repeat(Math.ceil(2_000_000 / unit.length));
+    const { ms, findings } = timedScan(makeArtifact({ [path]: `${line}\n` }), "dense triggers", R3_KILL_MS);
+    assert.deepEqual(findings.map((f) => `${f.path}:${f.line}|${f.rule}`).sort(), ids.map((id) => `${path}:1|${id}`).sort(), `se esperaba un hallazgo por regla en la línea 1: ${JSON.stringify(findings.slice(0, 20))}`);
+    assert.ok(ms < HOSTILE_LIMIT_MS, `la revisión de ${line.length} caracteres con todas las reglas repetidas tardó ${Math.round(ms)} ms; el límite es ${HOSTILE_LIMIT_MS} ms`);
+  });
+});
+
+// N-2/Q16: aws-access-key-id gets a leading boundary that excludes [A-Za-z0-9+/] before AKIA, so a base64 blob (WASM,
+// fonts, images inlined in a bundle) does not give false positives. The dev accepted losing "xAKIA…" (glued after a
+// letter); "K_AKIA…", "AKIA…x" and a quoted "AKIA…" are still found.
+const AWS_BODY = () => "SYNTHETICTEST" + "012";
+const AWS_IN_BASE64 = [
+  ["a synthetic base64 blob ending in …AUEEah right before AKIA", (k) => `const b="AGFzbQEAAAABBgFgAX8BfwMCAQAHBwEDcnVu${"AUEEah"}${k}Bx9+/a0Q==";`],
+  ["a letter before AKIA: xAKIA… (the dev accepted losing it)", (k) => `const k="x${k}";`],
+  ["a digit before AKIA", (k) => `const k="9${k}";`],
+  ["a + before AKIA", (k) => `const k="QUJD+${k}";`],
+  ["a / before AKIA", (k) => `const k="QUJD/${k}";`],
+  ["a / before ASIA", (_, s) => `const k="QUJD/${s}";`],
+];
+const AWS_KEPT = [
+  ["K_AKIA… (after an underscore)", (k) => `const k="K_${k}";`],
+  ["AKIA…x (followed by a letter)", (k) => `const k="${k}x";`],
+  ['a quoted "AKIA…"', (k) => `const k="${k}";`],
+  ["AKIA… at the start of a line", (k) => `${k};`],
+  ["ASIA… after a space", (_, s) => `key: ${s}`],
+];
+
+describe("[EP00-TBR-002-CA3] round 3 · N-2/Q16: aws-access-key-id does not fire inside base64", () => {
+  const akia = () => "AK" + "IA" + AWS_BODY();
+  const asia = () => "AS" + "IA" + AWS_BODY();
+  const CURRENT = /(?:AKIA|ASIA)[0-9A-Z]{16}/u; // the rule as it stands on 8cc6fac
+
+  test("[EP00-TBR-002-CA3] N-2 self-check: every base64 case matches the current rule, so each one proves the fix", () => {
+    assert.match(akia(), /^AKIA[0-9A-Z]{16}$/u);
+    for (const [title, line] of [...AWS_IN_BASE64, ...AWS_KEPT]) assert.match(line(akia(), asia()), CURRENT, `${title}: no tiene la forma de la regla actual`);
+  });
+
+  test("[EP00-TBR-002-CA3] N-2: AKIA or ASIA right after a letter, a digit, + or / (base64, including xAKIA… that the dev accepted losing) gives 0 findings", () => {
+    const scanArtifact = exported("scanArtifact");
+    const list = exported("loadPatternList")(LIST);
+    const lines = ["/* synthetic base64 */", ...AWS_IN_BASE64.map(([, line]) => line(akia(), asia()))];
+    const findings = scanArtifact(makeArtifact({ [MAIN_JS]: `${lines.join("\n")}\n` }), list);
+    assert.deepEqual(findings.map((f) => `${f.line}|${f.rule}`), [], `AKIA pegado a [A-Za-z0-9+/] es base64, no una llave: ${JSON.stringify(findings)}`);
+  });
+
+  test("[EP00-TBR-002-CA3] N-2 control: K_AKIA…, AKIA…x, a quoted AKIA…, AKIA… at the start of a line and ASIA… after a space are one finding each", () => {
+    const scanArtifact = exported("scanArtifact");
+    const list = exported("loadPatternList")(LIST);
+    const lines = ["/* synthetic */", ...AWS_KEPT.map(([, line]) => line(akia(), asia()))];
+    const findings = scanArtifact(makeArtifact({ [MAIN_JS]: `${lines.join("\n")}\n` }), list);
+    assert.deepEqual(findings.map((f) => `${f.line}|${f.rule}`), AWS_KEPT.map((_, i) => `${i + 2}|aws-access-key-id`), `cada llave AWS con límite debe seguir siendo un hallazgo: ${JSON.stringify(findings)}`);
+    assert.deepEqual(leakedPieces(JSON.stringify(findings), akia()), [], "sample no puede mostrar la llave");
   });
 });
 
@@ -1025,6 +1217,36 @@ describe("[EP00-TBR-002-CA3] validatePatternList rejects invalid lists", () => {
       const validatePatternList = exported("validatePatternList");
       const errors = validatePatternList({ ...validList(), exceptions: [exception({ path })] });
       assert.ok(Array.isArray(errors) && errors.length >= 1, `la excepción «${path}» nunca coincide con una ruta del artefacto y debe rechazarse; errores: ${JSON.stringify(errors)}`);
+    });
+  }
+
+  // Round 3 · N-4/Q17: more paths that can never match a relative "browser/…" path, written before the fix on 8cc6fac.
+  // Each last segment names a file (3 alphanumerics in a row), so only the new rule can reject them: a "\", an empty
+  // segment ("//"), a "." or ".." segment, or a leading "dist/" (the path is relative to dist/the-brain-front/).
+  const N4_NEVER_MATCHING = [
+    ["a backslash", "browser\\vendor-*.js"],
+    ["a backslash between folders", "browser\\lazy/vendor-*.js"],
+    ["an empty segment (//)", "browser//vendor-*.js"],
+    ["a . segment in the middle", "browser/./vendor-*.js"],
+    ["a leading .. segment", "../main-*.js"],
+    ["a .. segment in the middle", "browser/../main-*.js"],
+    ["a leading dist/ (the most likely mistake)", "dist/the-brain-front/browser/main-*.js"],
+    ["a leading dist/ with **", "dist/**/main-*.js"],
+  ];
+  for (const [title, path] of N4_NEVER_MATCHING) {
+    test(`[EP00-TBR-002-CA3] N-4: rejects an exception path that can never match, with ${title}: «${path}»`, () => {
+      const validatePatternList = exported("validatePatternList");
+      const errors = validatePatternList({ ...validList(), exceptions: [exception({ path })] });
+      assert.ok(Array.isArray(errors) && errors.length >= 1, `la excepción «${path}» nunca coincide con una ruta del artefacto y debe rechazarse; errores: ${JSON.stringify(errors)}`);
+    });
+  }
+  // Controls: upper case stays allowed (paths are case sensitive, that is not a form error), and a folder or name that
+  // only starts with a dot, or a top folder that only starts with "dist", is a real path.
+  const N4_ACCEPTED = ["BROWSER/vendor-*.js", "browser/.well-known/abc-*.js", "distro/vendor-*.js"];
+  for (const path of N4_ACCEPTED) {
+    test(`[EP00-TBR-002-CA3] N-4 control: accepts «${path}» (upper case, or segments that only start with a dot or with dist)`, () => {
+      const validatePatternList = exported("validatePatternList");
+      assert.deepEqual(validatePatternList({ ...validList(), exceptions: [exception({ path })] }), [], `la excepción «${path}» tiene buena forma y debe aceptarse`);
     });
   }
 });
