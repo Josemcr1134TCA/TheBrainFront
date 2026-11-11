@@ -28,8 +28,7 @@ export class TbPercentPipe implements PipeTransform {
 @Pipe({ name: 'tbDate' })
 export class TbDatePipe implements PipeTransform {
   private readonly clock = inject(TB_CLOCK);
-  transform(value: string | Date | number | null | undefined): string {
-    // A number is not a date for this system: it shows the empty mark.
-    return formatDate(typeof value === 'number' ? null : value, this.clock());
+  transform(value: string | null | undefined): string {
+    return formatDate(value, this.clock());
   }
 }
