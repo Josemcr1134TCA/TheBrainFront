@@ -28,6 +28,13 @@ module.exports = {
       to: { path: "^src/app/" },
     },
     {
+      name: "ui-public-api",
+      comment: "Anything in src/ outside src/ui/ imports the design system only through its public API (src/ui/index.ts, plus the generated tokens/), never its internals (DA-3, EP00-TBR-004).",
+      severity: "error",
+      from: { path: "^src/", pathNot: "^src/ui/" },
+      to: { path: "^src/ui/", pathNot: "^src/ui/(index\\.ts$|tokens/)" },
+    },
+    {
       name: "no-backend-in-front",
       comment: "The browser uses no Nest, Prisma or PostgreSQL drivers: data goes through TheBrainApi.",
       severity: "error",

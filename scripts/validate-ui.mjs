@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Static validator of The Brain design system (D-005, D-019; DEC-0009 of the harness).
 // Checks what the Tailwind theme cannot prevent. It reads the templates, components and styles of the app
-// (src/**/*.html, *.ts, *.css), except src/ui/ (design system and its document) and *.spec.ts files.
+// (src/**/*.html, *.ts, *.css), except src/ui/tokens/ and src/ui/docs/ (generated files and the reference document)
+// and *.spec.ts files. src/ui/components/ and src/ui/format/ are reviewed (DA-2, D-051).
 //
 //   node scripts/validate-ui.mjs          reviews src/
 //   node scripts/validate-ui.mjs --test   runs the self-tests of the validator
@@ -62,15 +63,28 @@ function visibleText(text, ext) {
   if (ext === ".ts") return text.replace(/[^`]*(`[^`]*`)?/g, (m, lit) => (lit ? m.slice(0, m.length - lit.length).replace(/[^\n]/g, " ") + lit.replace(/<[^>]*>/g, (t) => t.replace(/[^\n]/g, " ")) : m.replace(/[^\n]/g, " ")));
   return "";
 }
+// H6: the CSS literals of a component's styles: (string or array) are not text for people; the percent warning skips them.
+const STR = "`[^`]*`|'[^']*'|\"[^\"]*\"";
+const STYLES_RE = new RegExp(`\\bstyles\\s*:\\s*(?:\\[\\s*(?:${STR})(?:\\s*,\\s*(?:${STR}))*\\s*,?\\s*\\]|${STR})`, "g");
+const blankStyles = (text) => text.replace(STYLES_RE, (m) => m.replace(/[^\n]/g, " "));
 const lineOf = (text, i) => text.slice(0, i).split("\n").length;
 
 export function review(text, ext) {
   const clean = stripComments(text, ext);
   const findings = [];
   for (const r of ERROR_RULES) for (const m of clean.matchAll(r.re)) if (!r.filter || r.filter(m)) findings.push({ level: "error", id: r.id, line: lineOf(clean, m.index), sample: m[0], message: r.message });
-  const visible = visibleText(clean, ext);
+  const visible = visibleText(ext === ".ts" ? blankStyles(clean) : clean, ext);
   for (const r of WARNING_RULES) for (const m of visible.matchAll(r.re)) findings.push({ level: "warning", id: r.id, line: lineOf(visible, m.index), sample: m[0], message: r.message });
   return findings.sort((a, b) => a.line - b.line);
+}
+
+// Whether a file is reviewed (path relative to the repo root, with /). DA-2: the design system pieces and formats are
+// reviewed; its generated tokens and its reference document are not; neither are tests.
+export function isReviewed(relPath) {
+  const rel = relPath.split("\\").join("/");
+  if (rel.endsWith(".spec.ts")) return false;
+  if (rel.startsWith("src/ui/tokens/") || rel.startsWith("src/ui/docs/")) return false;
+  return true;
 }
 
 function listFiles(dir) {
@@ -78,9 +92,9 @@ function listFiles(dir) {
   for (const n of readdirSync(dir)) {
     const p = join(dir, n);
     const rel = relative(root, p).split(sep).join("/");
-    if (rel === "src/ui" || n === "node_modules") continue;
+    if (n === "node_modules") continue;
     if (statSync(p).isDirectory()) out.push(...listFiles(p));
-    else if ([".html", ".ts", ".css"].includes(extname(n)) && !n.endsWith(".spec.ts")) out.push(p);
+    else if ([".html", ".ts", ".css"].includes(extname(n)) && isReviewed(rel)) out.push(p);
   }
   return out;
 }

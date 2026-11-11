@@ -1,7 +1,9 @@
 // Tests for `npm run arch:check` (dependency-cruiser with the real .dependency-cruiser.cjs).
 // [EP00-TBR-001-CA2] Every forbidden rule fails on a synthetic violation and reports rule + import.
 // [EP00-TBR-014-CA3] Rule names are in English (DEC-0013, DEC-0017): boundary-<module>, module-layers,
-// http-only-in-data, ui-independent, no-cycles, hub-only-via-api and no-backend-in-front (14 rules in total).
+// http-only-in-data, ui-independent, no-cycles, hub-only-via-api and no-backend-in-front.
+// [EP00-TBR-004-CA1] DA-3 adds ui-public-api: every file under src/ outside src/ui/ imports src/ui/ only through
+// src/ui/index.ts or src/ui/tokens/ (widened by the tech lead on 2026-11-11; DEC-0017 amendment: 15 forbidden rules in total).
 // [EP00-TBR-014-CA6] The module list of .dependency-cruiser.cjs must match the table fixed in this file (MODULES).
 // If it does not, this file fails, so `arch:check` fails in its test step and says which name is extra and which is missing.
 // Fixtures are written at runtime under tmp/ (ignored by git) and removed afterwards.
@@ -30,7 +32,9 @@ const TEST_TIMEOUT_MS = CHILD_TIMEOUT_MS + 15_000;
 const MODULES = ["catalog", "replenishment", "purchasing", "inventory", "commercial", "intelligence", "integration", "administration"];
 const BOUNDARY_PREFIX = "boundary-";
 // [EP00-TBR-014-CA3] The 7 rule names of the story (boundary-<module> counts once as a family): 8 + 6 = 14 forbidden rules.
-const OTHER_RULES = ["module-layers", "http-only-in-data", "ui-independent", "no-cycles", "hub-only-via-api", "no-backend-in-front"];
+// [EP00-TBR-004-CA1] Plus ui-public-api (DA-3, DEC-0017 amendment): 8 + 7 = 15 forbidden rules.
+const OTHER_RULES = ["module-layers", "http-only-in-data", "ui-independent", "no-cycles", "hub-only-via-api", "no-backend-in-front", "ui-public-api"];
+const EXPECTED_RULE_COUNT = 15;
 const EXPECTED_RULES = [...MODULES.map((m) => `${BOUNDARY_PREFIX}${m}`), ...OTHER_RULES];
 // Test data only: the rule and module names used before DEC-0013. None of them may remain in the config.
 const LEGACY_PREFIX = "frontera-";
@@ -148,6 +152,62 @@ const CASES = [
     to: "src/app/app.config.ts",
   },
   {
+    tag: "[EP00-TBR-004-CA1]",
+    title: "fails on ui-public-api when a module page imports a design system internal",
+    rule: "ui-public-api",
+    files: {
+      "src/ui/components/button/button.ts": "export const button = 'button';\n",
+      "src/app/purchasing/pages/p.ts": "import { button } from '../../../ui/components/button/button';\nexport const p = button;\n",
+    },
+    from: "src/app/purchasing/pages/p.ts",
+    to: "src/ui/components/button/button.ts",
+  },
+  {
+    tag: "[EP00-TBR-004-CA1]",
+    title: "fails on ui-public-api when the app root imports src/ui/format directly",
+    rule: "ui-public-api",
+    files: {
+      "src/ui/format/format.ts": "export const formatMoney = (v: number) => String(v);\n",
+      "src/app/app.ts": "import { formatMoney } from '../ui/format/format';\nexport const app = formatMoney;\n",
+    },
+    from: "src/app/app.ts",
+    to: "src/ui/format/format.ts",
+  },
+  {
+    tag: "[EP00-TBR-004-CA1]",
+    title: "fails on ui-public-api when src/main.ts (outside src/app/) imports a design system internal",
+    rule: "ui-public-api",
+    files: {
+      "src/ui/components/button/button.ts": "export const button = 'button';\n",
+      "src/main.ts": "import { button } from './ui/components/button/button';\nexport const main = button;\n",
+    },
+    from: "src/main.ts",
+    to: "src/ui/components/button/button.ts",
+  },
+  // Security review (low): only the exact src/ui/index.ts is public; a file whose name merely starts with index.ts is not.
+  {
+    tag: "[EP00-TBR-004-CA1]",
+    title: "fails on ui-public-api when a file outside src/ui/ imports src/ui/index.tsx",
+    rule: "ui-public-api",
+    files: {
+      "src/ui/index.tsx": "export const hidden = 'internal';\n",
+      "src/app/app.ts": "import { hidden } from '../ui/index.tsx';\nexport const app = hidden;\n",
+    },
+    from: "src/app/app.ts",
+    to: "src/ui/index.tsx",
+  },
+  {
+    tag: "[EP00-TBR-004-CA1]",
+    title: "fails on ui-public-api when a file outside src/ui/ imports a file whose name starts with src/ui/index.ts",
+    rule: "ui-public-api",
+    files: {
+      "src/ui/index.ts.internal.ts": "export const hidden = 'internal';\n",
+      "src/main.ts": "import { hidden } from './ui/index.ts.internal';\nexport const main = hidden;\n",
+    },
+    from: "src/main.ts",
+    to: "src/ui/index.ts.internal.ts",
+  },
+  {
     title: "fails on no-cycles when two files import each other",
     rule: "no-cycles",
     cycle: true,
@@ -184,7 +244,7 @@ const CASES = [
 
 describe("[EP00-TBR-001-CA2][EP00-TBR-014-CA3] arch:check rules", { concurrency: CONCURRENCY }, () => {
   for (const c of CASES) {
-    it(`[EP00-TBR-001-CA2][EP00-TBR-014-CA3] ${c.title} and reports the import`, { timeout: TEST_TIMEOUT_MS }, async () => {
+    it(`[EP00-TBR-001-CA2][EP00-TBR-014-CA3]${c.tag ?? ""} ${c.title} and reports the import`, { timeout: TEST_TIMEOUT_MS }, async () => {
       const dir = makeFixture(c.files);
       const [text, json] = await Promise.all([cruise(dir), cruise(dir, ["-T", "json"])]);
 
@@ -226,6 +286,58 @@ describe("[EP00-TBR-001-CA2][EP00-TBR-014-CA3] arch:check rules", { concurrency:
     const result = await cruise(dir);
     assert.equal(result.status, 0, `el control negativo no debería fallar:\n${result.stdout}${result.stderr}`);
   });
+
+  it("[EP00-TBR-004-CA1] passes (exit 0) when src/app/ imports the design system through src/ui/index.ts (negative control)", { timeout: TEST_TIMEOUT_MS }, async () => {
+    const dir = makeFixture({
+      "src/ui/components/skeleton/skeleton.ts": "export const skeleton = 'skeleton';\n",
+      "src/ui/components/data-table/data-table.ts": "import { skeleton } from '../skeleton/skeleton';\nexport const table = { skeleton };\n",
+      "src/ui/format/format.ts": "export const formatMoney = (v: number) => String(v);\n",
+      "src/ui/index.ts": "export { table } from './components/data-table/data-table';\nexport { formatMoney } from './format/format';\n",
+      "src/app/purchasing/pages/list.ts": "import { table, formatMoney } from '../../../ui';\nexport const list = { table, formatMoney };\n",
+      "src/app/app.ts": "import { formatMoney } from '../ui/index';\nexport const app = formatMoney;\n",
+    });
+    const result = await cruise(dir);
+    assert.equal(result.status, 0, `importar src/ui/ por su index.ts no debería fallar:\n${result.stdout}${result.stderr}`);
+  });
+});
+
+// [EP00-TBR-004-CA1] Widened ui-public-api (decision of the tech lead, 2026-11-11): every file under src/ outside src/ui/
+// reaches src/ui/ only through src/ui/index.ts or src/ui/tokens/; pieces inside src/ui/ may import each other.
+describe("[EP00-TBR-004-CA1] widened ui-public-api: allowed imports (negative controls)", { concurrency: CONCURRENCY }, () => {
+  const CONTROLS = [
+    {
+      title: "src/main.ts imports src/ui/index.ts",
+      files: {
+        "src/ui/components/button/button.ts": "export const button = 'button';\n",
+        "src/ui/index.ts": "export { button } from './components/button/button';\n",
+        "src/main.ts": "import { button } from './ui/index';\nexport const main = button;\n",
+      },
+    },
+    {
+      title: "a file outside src/ui/ (src/app/ and src/main.ts) imports src/ui/tokens/",
+      files: {
+        "src/ui/tokens/tokens.ts": "export const tokens = { accent: 'var(--tb-accent)' };\n",
+        "src/app/app.ts": "import { tokens } from '../ui/tokens/tokens';\nexport const app = tokens;\n",
+        "src/main.ts": "import { tokens } from './ui/tokens/tokens';\nexport const main = tokens;\n",
+      },
+    },
+    {
+      title: "inside src/ui/, a piece imports another internal piece",
+      files: {
+        "src/ui/components/icon/icon.ts": "export const icon = 'icon';\n",
+        "src/ui/components/button/button.ts": "import { icon } from '../icon/icon';\nexport const button = icon;\n",
+        "src/ui/format/format.ts": "export const formatMoney = (v: number) => String(v);\n",
+        "src/ui/components/data-table/data-table.ts":
+          "import { button } from '../button/button';\nimport { formatMoney } from '../../format/format';\nexport const table = { button, formatMoney };\n",
+      },
+    },
+  ];
+  for (const c of CONTROLS) {
+    it(`[EP00-TBR-004-CA1] passes (exit 0) when ${c.title}`, { timeout: TEST_TIMEOUT_MS }, async () => {
+      const result = await cruise(makeFixture(c.files));
+      assert.equal(result.status, 0, `esta importación debe estar permitida (${c.title}):\n${result.stdout}${result.stderr}`);
+    });
+  }
 });
 
 test("[EP00-TBR-001-CA2][EP00-TBR-014-CA3] every forbidden rule in .dependency-cruiser.cjs has a test case (coverage)", () => {
@@ -239,13 +351,37 @@ test("[EP00-TBR-001-CA2][EP00-TBR-014-CA3] every forbidden rule in .dependency-c
   assert.equal(CASES.filter((c) => c.rule === "module-layers").length, 2);
 });
 
-test("[EP00-TBR-014-CA3] the config has exactly the 14 forbidden rules, all with their English names", () => {
+test("[EP00-TBR-014-CA3][EP00-TBR-004-CA1] the config has exactly the 15 forbidden rules, all with their English names", () => {
   const configured = config.forbidden.map((r) => r.name);
   const repeated = configured.filter((name, i) => configured.indexOf(name) !== i);
   assert.deepEqual(repeated, [], `reglas repetidas en .dependency-cruiser.cjs: ${repeated.join(", ")}`);
   const legacy = configured.filter((name) => name.startsWith(LEGACY_PREFIX) || LEGACY_RULES.includes(name));
   assert.deepEqual(legacy, [], `reglas con nombre antiguo en español: ${legacy.join(", ")}`);
-  assert.deepEqual([...configured].sort(), [...EXPECTED_RULES].sort(), `las reglas no son las 14 esperadas: ${configured.join(", ")}`);
+  assert.equal(EXPECTED_RULES.length, EXPECTED_RULE_COUNT);
+  assert.equal(configured.length, EXPECTED_RULE_COUNT, `se esperaban ${EXPECTED_RULE_COUNT} reglas y hay ${configured.length}: ${configured.join(", ")}`);
+  assert.deepEqual([...configured].sort(), [...EXPECTED_RULES].sort(), `las reglas no son las ${EXPECTED_RULE_COUNT} esperadas: ${configured.join(", ")}`);
+});
+
+test("[EP00-TBR-004-CA1] ui-public-api covers all of src/ except src/ui/ and only lets src/ui/index.ts and src/ui/tokens/ through", () => {
+  const rule = config.forbidden.find((r) => r.name === "ui-public-api");
+  assert.ok(rule, "falta la regla ui-public-api en .dependency-cruiser.cjs (DA-3)");
+  assert.equal(rule.severity, "error");
+  assert.equal(typeof rule.comment, "string");
+  assert.notEqual(rule.comment.trim(), "", "la regla debe explicar en comment por qué falla");
+  const matches = (side, path) => new RegExp(side.path).test(path) && !(side.pathNot && new RegExp(side.pathNot).test(path));
+  // from: ^src/ minus ^src/ui/
+  for (const p of ["src/app/catalog/pages/list.ts", "src/app/app.ts", "src/main.ts", "src/core/x.ts"])
+    assert.ok(matches(rule.from, p), `la regla debe vigilar las importaciones que salen de ${p}`);
+  for (const p of ["src/ui/components/data-table/data-table.ts", "src/ui/index.ts", "src/ui/format/format.ts"])
+    assert.ok(!matches(rule.from, p), `la regla no debe vigilar lo que sale de ${p} (dentro de src/ui/)`);
+  // to: ^src/ui/ minus ^src/ui/(index.ts$|tokens/): the public file is exactly src/ui/index.ts (security review, low)
+  assert.equal(rule.to.path, "^src/ui/");
+  assert.equal(rule.to.pathNot, "^src/ui/(index\\.ts$|tokens/)", "pathNot debe anclar index.ts con $ para que solo pase src/ui/index.ts");
+  for (const p of ["src/ui/components/button/button.ts", "src/ui/format/format.ts", "src/ui/components/index.ts", "src/ui/format/index.ts",
+    "src/ui/index.tsx", "src/ui/index.ts.bak", "src/ui/index.ts.internal.ts"])
+    assert.ok(matches(rule.to, p), `${p} es interno y debe quedar prohibido`);
+  for (const p of ["src/ui/index.ts", "src/ui/tokens/tokens.json", "src/ui/tokens/theme.ts"])
+    assert.ok(!matches(rule.to, p), `${p} debe quedar permitido`);
 });
 
 // [EP00-TBR-014-CA6] Pure comparison between the module list of the config and the fixed table.
