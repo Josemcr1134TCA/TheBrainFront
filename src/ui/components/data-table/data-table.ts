@@ -34,8 +34,7 @@ export interface TbSort {
 export interface TbColumn<T = any> {
   readonly id: string;
   readonly header: string;
-  // Any other text is shown as text; the union keeps the autocomplete of the real types.
-  readonly type: TbColumnType | (string & {});
+  readonly type: TbColumnType;
   /** Reads the cell value from the row. null, undefined or an empty text show the empty mark. */
   readonly value: (row: T) => unknown;
   /** Money only: shows two decimals. */
@@ -90,7 +89,18 @@ interface RowView<T> {
 
 type Mode = 'grid' | 'skeleton' | TbEmptyVariant;
 
-const NUMERIC: readonly string[] =['money', 'quantity', 'percent'];
+const NUMERIC: readonly string[] = ['money', 'quantity', 'percent'];
+
+// Complete by construction: the compiler fails if a status is missing here.
+const STATUS_VALUES: Record<TbStatusValue, true> = {
+  DRAFT: true,
+  IN_CAPTURE: true,
+  PENDING: true,
+  ACTIVE: true,
+  APPLIED: true,
+  WITH_ERROR: true,
+  EXPIRED: true,
+};
 
 /**
  * DataTable with its search box. Replicates v6 "c-DataTable" and "Tablas" (grid of tb-head-row and tb-row, search tb-find).
@@ -121,9 +131,9 @@ const NUMERIC: readonly string[] =['money', 'quantity', 'percent'];
   host: { class: 'tb-card tb-dt' },
   template: `
     @if (title()) {
-      <header class="tb-dt-head">
-        <h3>{{ title() }}</h3>
-        <div class="acts"><ng-content select="[tbActions]" /></div>
+      <header class="tb-sec">
+        <h2>{{ title() }}</h2>
+        <div class="tools"><ng-content select="[tbActions]" /></div>
       </header>
     }
     @if (state() !== 'forbidden') {
@@ -237,9 +247,9 @@ const NUMERIC: readonly string[] =['money', 'quantity', 'percent'];
   `,
   styles: `
     .tb-dt { display: block; }
-    .tb-dt-head { display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-3); padding: var(--spacing-4) var(--spacing-5); border-bottom: 1px solid var(--color-line); }
-    .tb-dt-head h3 { margin: 0; font: 600 14px/20px var(--font-sans); color: var(--color-ink); }
-    .tb-dt-head .acts { display: flex; align-items: center; gap: var(--spacing-2); }
+    .tb-sec { display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-3); padding: var(--spacing-3) var(--spacing-4); border-bottom: 1px solid var(--color-line); flex-wrap: wrap; }
+    .tb-sec h2 { margin: 0; display: flex; align-items: center; gap: 8px; font: 600 14px/20px var(--font-sans); color: var(--color-ink); }
+    .tb-sec .tools { display: flex; align-items: center; gap: var(--spacing-2); margin-left: auto; min-width: 0; }
     .tb-filterbar { display: flex; align-items: center; gap: var(--spacing-2); flex-wrap: wrap; padding: var(--spacing-3) var(--spacing-4); border-bottom: 1px solid var(--color-line); }
     .tb-filters { display: flex; flex-wrap: wrap; gap: var(--spacing-2); align-items: center; flex: 1; min-width: 0; }
     .tb-find { display: flex; align-items: center; gap: 8px; height: var(--size-control-md); padding: 0 10px; border: 1px solid var(--color-line); border-radius: var(--radius-md); background: var(--color-surface); color: var(--color-ink-muted); min-width: 0; width: 240px; margin-left: auto; }
@@ -254,7 +264,7 @@ const NUMERIC: readonly string[] =['money', 'quantity', 'percent'];
     .tb-head-row .th { all: unset; display: inline-flex; align-items: center; gap: 4px; cursor: pointer; color: var(--color-ink-muted); font: 500 12px/16px var(--font-sans); border-radius: var(--radius-sm); }
     .tb-head-row .th:hover { color: var(--color-ink); }
     .tb-head-row .th:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
-    .tb-head-row .th .tb-ico { opacity: 0; }
+    .tb-head-row .th .tb-ico { width: 12px; height: 12px; opacity: 0; }
     .tb-head-row .th:hover .tb-ico, .tb-head-row [aria-sort] .tb-ico { opacity: 1; }
     .tb-head-row [aria-sort] .th { color: var(--color-ink); }
     .tb-head-row .th.r { justify-content: flex-end; }
@@ -267,7 +277,7 @@ const NUMERIC: readonly string[] =['money', 'quantity', 'percent'];
     .cellt.m { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
     .cellt.r { text-align: right; }
     .cellt.mute { color: var(--color-ink-muted); }
-    .tb-dt-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-3); padding: var(--spacing-3) var(--spacing-4); border-top: 1px solid var(--color-line); font: 400 12px/16px var(--font-sans); color: var(--color-ink-muted); }
+    .tb-dt-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-4); padding: 10px var(--spacing-4); border-top: 1px solid var(--color-line); font: 400 12px/16px var(--font-sans); color: var(--color-ink-muted); }
     .tb-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
     @media (max-width: 860px) { .tb-find { width: 100%; margin-left: 0; flex: 1 0 100%; } }
   `,
@@ -360,8 +370,10 @@ export class TbDataTable<T = any> {
     return NUMERIC.includes(column.type);
   }
 
+  private readonly cellMap = computed(() => new Map(this.cellDefs().map((def) => [def.columnId(), def])));
+
   protected customCell(id: string): TbCellDef | undefined {
-    return this.cellDefs().find((def) => def.columnId() === id);
+    return this.cellMap().get(id);
   }
 
   protected ariaSort(column: TbColumn<T>): 'ascending' | 'descending' | null {
@@ -421,9 +433,13 @@ export class TbDataTable<T = any> {
       case 'percent':
         return { ...base, text: formatPercent(this.asNumber(value)), mute: this.asNumber(value) === null };
       case 'date':
-        return { ...base, text: formatDate(value as string | Date, this.clock()) };
+        return typeof value === 'string'
+          ? { ...base, text: formatDate(value, this.clock()) }
+          : { ...base, text: NULL_DISPLAY, mute: true };
       case 'status':
-        return { ...base, text: '', status: value as TbStatusValue };
+        return typeof value === 'string' && Object.hasOwn(STATUS_VALUES, value)
+          ? { ...base, text: '', status: value as TbStatusValue }
+          : { ...base, text: NULL_DISPLAY, mute: true };
       default:
         return { ...base, text: String(value) };
     }
