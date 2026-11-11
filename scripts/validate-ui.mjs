@@ -63,13 +63,17 @@ function visibleText(text, ext) {
   if (ext === ".ts") return text.replace(/[^`]*(`[^`]*`)?/g, (m, lit) => (lit ? m.slice(0, m.length - lit.length).replace(/[^\n]/g, " ") + lit.replace(/<[^>]*>/g, (t) => t.replace(/[^\n]/g, " ")) : m.replace(/[^\n]/g, " ")));
   return "";
 }
+// H6: the CSS literals of a component's styles: (string or array) are not text for people; the percent warning skips them.
+const STR = "`[^`]*`|'[^']*'|\"[^\"]*\"";
+const STYLES_RE = new RegExp(`\\bstyles\\s*:\\s*(?:\\[\\s*(?:${STR})(?:\\s*,\\s*(?:${STR}))*\\s*,?\\s*\\]|${STR})`, "g");
+const blankStyles = (text) => text.replace(STYLES_RE, (m) => m.replace(/[^\n]/g, " "));
 const lineOf = (text, i) => text.slice(0, i).split("\n").length;
 
 export function review(text, ext) {
   const clean = stripComments(text, ext);
   const findings = [];
   for (const r of ERROR_RULES) for (const m of clean.matchAll(r.re)) if (!r.filter || r.filter(m)) findings.push({ level: "error", id: r.id, line: lineOf(clean, m.index), sample: m[0], message: r.message });
-  const visible = visibleText(clean, ext);
+  const visible = visibleText(ext === ".ts" ? blankStyles(clean) : clean, ext);
   for (const r of WARNING_RULES) for (const m of visible.matchAll(r.re)) findings.push({ level: "warning", id: r.id, line: lineOf(visible, m.index), sample: m[0], message: r.message });
   return findings.sort((a, b) => a.line - b.line);
 }
