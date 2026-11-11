@@ -184,6 +184,29 @@ const CASES = [
     from: "src/main.ts",
     to: "src/ui/components/button/button.ts",
   },
+  // Security review (low): only the exact src/ui/index.ts is public; a file whose name merely starts with index.ts is not.
+  {
+    tag: "[EP00-TBR-004-CA1]",
+    title: "fails on ui-public-api when a file outside src/ui/ imports src/ui/index.tsx",
+    rule: "ui-public-api",
+    files: {
+      "src/ui/index.tsx": "export const hidden = 'internal';\n",
+      "src/app/app.ts": "import { hidden } from '../ui/index.tsx';\nexport const app = hidden;\n",
+    },
+    from: "src/app/app.ts",
+    to: "src/ui/index.tsx",
+  },
+  {
+    tag: "[EP00-TBR-004-CA1]",
+    title: "fails on ui-public-api when a file outside src/ui/ imports a file whose name starts with src/ui/index.ts",
+    rule: "ui-public-api",
+    files: {
+      "src/ui/index.ts.internal.ts": "export const hidden = 'internal';\n",
+      "src/main.ts": "import { hidden } from './ui/index.ts.internal';\nexport const main = hidden;\n",
+    },
+    from: "src/main.ts",
+    to: "src/ui/index.ts.internal.ts",
+  },
   {
     title: "fails on no-cycles when two files import each other",
     rule: "no-cycles",
@@ -351,8 +374,11 @@ test("[EP00-TBR-004-CA1] ui-public-api covers all of src/ except src/ui/ and onl
     assert.ok(matches(rule.from, p), `la regla debe vigilar las importaciones que salen de ${p}`);
   for (const p of ["src/ui/components/data-table/data-table.ts", "src/ui/index.ts", "src/ui/format/format.ts"])
     assert.ok(!matches(rule.from, p), `la regla no debe vigilar lo que sale de ${p} (dentro de src/ui/)`);
-  // to: ^src/ui/ minus ^src/ui/(index.ts|tokens/)
-  for (const p of ["src/ui/components/button/button.ts", "src/ui/format/format.ts", "src/ui/components/index.ts", "src/ui/format/index.ts"])
+  // to: ^src/ui/ minus ^src/ui/(index.ts$|tokens/): the public file is exactly src/ui/index.ts (security review, low)
+  assert.equal(rule.to.path, "^src/ui/");
+  assert.equal(rule.to.pathNot, "^src/ui/(index\\.ts$|tokens/)", "pathNot debe anclar index.ts con $ para que solo pase src/ui/index.ts");
+  for (const p of ["src/ui/components/button/button.ts", "src/ui/format/format.ts", "src/ui/components/index.ts", "src/ui/format/index.ts",
+    "src/ui/index.tsx", "src/ui/index.ts.bak", "src/ui/index.ts.internal.ts"])
     assert.ok(matches(rule.to, p), `${p} es interno y debe quedar prohibido`);
   for (const p of ["src/ui/index.ts", "src/ui/tokens/tokens.json", "src/ui/tokens/theme.ts"])
     assert.ok(!matches(rule.to, p), `${p} debe quedar permitido`);
