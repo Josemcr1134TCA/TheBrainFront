@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Static validator of The Brain design system (D-005, D-019; DEC-0009 of the harness).
 // Checks what the Tailwind theme cannot prevent. It reads the templates, components and styles of the app
-// (src/**/*.html, *.ts, *.css), except src/ui/ (design system and its document) and *.spec.ts files.
+// (src/**/*.html, *.ts, *.css), except src/ui/tokens/ and src/ui/docs/ (generated files and the reference document)
+// and *.spec.ts files. src/ui/components/ and src/ui/format/ are reviewed (DA-2, D-051).
 //
 //   node scripts/validate-ui.mjs          reviews src/
 //   node scripts/validate-ui.mjs --test   runs the self-tests of the validator
@@ -73,14 +74,23 @@ export function review(text, ext) {
   return findings.sort((a, b) => a.line - b.line);
 }
 
+// Whether a file is reviewed (path relative to the repo root, with /). DA-2: the design system pieces and formats are
+// reviewed; its generated tokens and its reference document are not; neither are tests.
+export function isReviewed(relPath) {
+  const rel = relPath.split("\\").join("/");
+  if (rel.endsWith(".spec.ts")) return false;
+  if (rel.startsWith("src/ui/tokens/") || rel.startsWith("src/ui/docs/")) return false;
+  return true;
+}
+
 function listFiles(dir) {
   const out = [];
   for (const n of readdirSync(dir)) {
     const p = join(dir, n);
     const rel = relative(root, p).split(sep).join("/");
-    if (rel === "src/ui" || n === "node_modules") continue;
+    if (n === "node_modules") continue;
     if (statSync(p).isDirectory()) out.push(...listFiles(p));
-    else if ([".html", ".ts", ".css"].includes(extname(n)) && !n.endsWith(".spec.ts")) out.push(p);
+    else if ([".html", ".ts", ".css"].includes(extname(n)) && isReviewed(rel)) out.push(p);
   }
   return out;
 }
