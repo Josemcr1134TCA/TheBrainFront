@@ -159,11 +159,17 @@ function decodeRole(payload) {
   }
 }
 
-// Content matches of one rule: [{ index, text }] where text is the matched string (never printed in full).
-function contentMatches(rule, text) {
-  const matches = [];
+// Error type shown to people: only a plain error name, never the message or the trace.
+const errorType = (error) => {
+  const name = error?.name;
+  return typeof name === "string" && /^[A-Za-z]{1,40}$/.test(name) ? name : "Error";
+};
+
+// Content matches of one rule, yielded as they are found: { index, text } where text is the matched string (never
+// printed in full). A generator, so the matches found before an error are not lost.
+function* contentMatches(rule, text) {
   if (rule.kind === "regex") {
-    for (const m of text.matchAll(new RegExp(rule.pattern, "gu"))) matches.push({ index: m.index, text: m[0] });
+    for (const m of text.matchAll(new RegExp(rule.pattern, "gu"))) yield { index: m.index, text: m[0] };
   } else {
     for (const run of text.matchAll(TOKEN_RUN_RE)) {
       const parts = run[0].split(".");
@@ -186,12 +192,11 @@ function contentMatches(rule, text) {
         if (roleOf(i + 1) !== rule.role) continue;
         const from = starts[i] + k;
         const to = starts[i + 2] + parts[i + 2].length;
-        matches.push({ index: run.index + from, text: run[0].slice(from, to) });
+        yield { index: run.index + from, text: run[0].slice(from, to) };
         i += 2;
       }
     }
   }
-  return matches;
 }
 
 function scanDetailed(dir, list) {
@@ -211,7 +216,14 @@ function scanDetailed(dir, list) {
     for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : 1))) {
       const abs = join(current, entry.name);
       const path = relative(dir, abs).split("\\").join("/");
-      if (entry.isSymbolicLink() || lstatSync(abs).isSymbolicLink()) {
+      let isLink;
+      try {
+        isLink = entry.isSymbolicLink() || lstatSync(abs).isSymbolicLink();
+      } catch {
+        findings.push({ rule: "unreadable", path, line: 0, sample: "no se pudo leer la entrada" });
+        continue;
+      }
+      if (isLink) {
         findings.push({ rule: "symlink", path, line: 0, sample: "enlace simbólico; no se sigue" });
         continue;
       }
@@ -256,11 +268,16 @@ function scanDetailed(dir, list) {
       for (const rule of list.contents) {
         if (exceptions.some((e) => e.rule === rule.id && e.re.test(path))) continue;
         const reported = new Set();
-        for (const match of contentMatches(rule, text)) {
-          const line = lineOf(match.index);
-          if (reported.has(line)) continue;
-          reported.add(line);
-          findings.push({ rule: rule.id, path, line, sample: mask(match.text) });
+        try {
+          for (const match of contentMatches(rule, text)) {
+            const line = lineOf(match.index);
+            if (reported.has(line)) continue;
+            reported.add(line);
+            findings.push({ rule: rule.id, path, line, sample: mask(match.text) });
+          }
+        } catch (error) {
+          // Fail closed: matches found before the error are kept; the other rules and files still run.
+          findings.push({ rule: "scan-error", path, line: 0, sample: `no se pudo revisar con la regla «${rule.id}» (${errorType(error)}); el archivo no pasa la revisión` });
         }
       }
     }
@@ -315,7 +332,15 @@ function main(argv) {
     return;
   }
 
-  const { findings, files } = scanDetailed(dir, list);
+  let result;
+  try {
+    result = scanDetailed(dir, list);
+  } catch (error) {
+    console.error(`check-artifact: error inesperado al revisar ${shown} (${errorType(error)}); la revisión falla y no se sube nada`);
+    process.exitCode = 1;
+    return;
+  }
+  const { findings, files } = result;
   for (const f of findings) {
     console.error(`ERROR  ${f.path}${f.line ? `:${f.line}` : ""}  · ${f.rule} · ${f.sample}`);
   }

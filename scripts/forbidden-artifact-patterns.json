@@ -38,18 +38,18 @@
   "contents": [
     { "id": "private-key-block", "kind": "regex", "pattern": "-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----", "reason": "llave privada" },
     { "id": "service-role-jwt", "kind": "jwt-role", "role": "service_role", "reason": "llave service_role de Supabase" },
-    { "id": "supabase-secret-key", "kind": "regex", "pattern": "\\bsb_secret_[A-Za-z0-9_-]{20,}", "reason": "llave secreta de Supabase" },
+    { "id": "supabase-secret-key", "kind": "regex", "pattern": "\\bsb_secret_[A-Za-z0-9_-]{20}", "reason": "llave secreta de Supabase" },
     { "id": "supabase-service-role-env", "kind": "regex", "pattern": "\\bSUPABASE_SERVICE_ROLE(?:_KEY)?\\b", "reason": "variable de la llave service_role de Supabase" },
     { "id": "vercel-token-env", "kind": "regex", "pattern": "\\bVERCEL_(?:TOKEN|OIDC_TOKEN)\\b", "reason": "variable de token de Vercel" },
     { "id": "postgres-url-with-password", "kind": "regex", "pattern": "postgres(?:ql)?://[^\\s:@/'\"`]+:[^\\s@/'\"`]+@", "reason": "cadena de conexión a PostgreSQL con contraseña" },
-    { "id": "github-token", "kind": "regex", "pattern": "(?:gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{60,})", "reason": "token de GitHub" },
+    { "id": "github-token", "kind": "regex", "pattern": "(?:gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{60})", "reason": "token de GitHub" },
     { "id": "aws-access-key-id", "kind": "regex", "pattern": "(?<![A-Za-z0-9+/])(?:AKIA|ASIA)[0-9A-Z]{16}", "reason": "llave de acceso de AWS" },
-    { "id": "stripe-secret-key", "kind": "regex", "pattern": "[sr]k_(?:live|test)_[0-9A-Za-z]{20,}", "reason": "llave secreta de Stripe" },
-    { "id": "slack-token", "kind": "regex", "pattern": "\\bxox[abposr]-[0-9A-Za-z-]{10,}", "reason": "token de Slack" },
+    { "id": "stripe-secret-key", "kind": "regex", "pattern": "[sr]k_(?:live|test)_[0-9A-Za-z]{20}", "reason": "llave secreta de Stripe" },
+    { "id": "slack-token", "kind": "regex", "pattern": "\\bxox[abposr]-[0-9A-Za-z-]{10}", "reason": "token de Slack" },
     { "id": "google-api-key", "kind": "regex", "pattern": "AIza[0-9A-Za-z_-]{35}", "reason": "llave de API de Google o Firebase" },
     { "id": "npm-token", "kind": "regex", "pattern": "(?<![A-Za-z0-9])npm_[A-Za-z0-9]{36}", "reason": "token de npm" },
-    { "id": "anthropic-api-key", "kind": "regex", "pattern": "(?<![A-Za-z0-9])sk-ant-[A-Za-z0-9_-]{32,}", "reason": "llave de API de Anthropic" },
-    { "id": "ai-provider-secret-key", "kind": "regex", "pattern": "(?<![A-Za-z0-9])sk-(?!ant-[A-Za-z0-9_-]{32})[A-Za-z0-9_-]{32,}", "reason": "llave secreta de un proveedor de IA" }
+    { "id": "anthropic-api-key", "kind": "regex", "pattern": "(?<![A-Za-z0-9])sk-ant-[A-Za-z0-9_-]{32}", "reason": "llave de API de Anthropic" },
+    { "id": "ai-provider-secret-key", "kind": "regex", "pattern": "(?<![A-Za-z0-9])sk-(?!ant-[A-Za-z0-9_-]{32})[A-Za-z0-9_-]{32}", "reason": "llave secreta de un proveedor de IA" }
   ],
   "exceptions": []
 }
