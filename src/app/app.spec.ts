@@ -21,3 +21,4 @@ describe('App', () => {
     expect(h1?.classList).toContain('text-display');
   });
 });
+const m1TypeError: number = 'texto';
