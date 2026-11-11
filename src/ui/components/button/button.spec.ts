@@ -1,7 +1,7 @@
 // [EP00-TBR-004-CA3] Button (v6 c-Buttons; design docs/diseno/EP00-TBR-004.md §3.1, §4, §6).
 // jsdom does not move focus with Tab: tabbables() models the browser tab order (DOM order, tabindex >= 0, not disabled).
 // The focus ring itself is checked statically in scripts/validate-ui.test.mjs (jsdom cannot evaluate :focus-visible).
-import { Component } from '@angular/core';
+import { Component, signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { TbButton } from './button';
 
@@ -27,7 +27,7 @@ function tabbables(root: ParentNode): HTMLElement[] {
       Crear producto
     </button>
     <button tb-button id="submit" type="submit">Enviar</button>
-    <button tb-button id="busy" [busy]="busy" (click)="busyClicks = busyClicks + 1">
+    <button tb-button id="busy" [busy]="busy()" (click)="busyClicks = busyClicks + 1">
       Guardando
     </button>
     <button tb-button id="disabled" [disabled]="true" disabledReason="Sin permiso para editar">
@@ -41,7 +41,9 @@ function tabbables(root: ParentNode): HTMLElement[] {
 })
 class ButtonHost {
   clicks = 0;
-  busy = true;
+  // A signal, as a real caller would hold it: the host is OnPush (Angular 22 default), so a plain field
+  // change is not repainted, while a signal change marks the host view for check.
+  busy = signal(true);
   busyClicks = 0;
   linkBusy = true;
 }
@@ -108,8 +110,7 @@ for (const theme of THEMES) {
 
     it('[EP00-TBR-004-CA3] busy goes away when the work ends', () => {
       const { fixture, q, host } = render();
-      host.busy = false;
-      fixture.changeDetectorRef.markForCheck();
+      host.busy.set(false);
       fixture.detectChanges();
       const busy = q<HTMLButtonElement>('busy');
       expect(busy.getAttribute('aria-busy')).not.toBe('true');
