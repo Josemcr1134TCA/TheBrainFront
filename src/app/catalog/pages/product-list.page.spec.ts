@@ -823,6 +823,50 @@ describe('[EP00-TBR-003-CA1] catalog screen: layout of the approved table', () =
     expect(flat(el)).not.toMatch(/sku/i);
     expect(labelled).not.toMatch(/sku/i);
   });
+
+  // Approved UI 1607a54: the «Código» and «EAN» cells are mono (kit class tb-num); no other column is.
+  // Accepted deviation H3: the «—» of an empty EAN may be mono or not, so that cell is neither required nor excluded.
+  describe('[EP00-TBR-003-CA1] mono columns «Código» and «EAN» (tb-num)', () => {
+    const MONO_HEADERS = ['Código', 'EAN'];
+    const isMono = (cell: HTMLElement) => cell.classList.contains('tb-num') || !!cell.querySelector('.tb-num');
+
+    function expectMonoColumns(el: HTMLElement, emptyEanCodes: readonly string[] = []) {
+      const names = headers(el);
+      expect(names).toHaveLength(10);
+      expect(rows(el).length).toBeGreaterThan(0);
+      const codeAt = names.indexOf('Código');
+      const eanAt = names.indexOf('EAN');
+
+      for (const head of Array.from(el.querySelectorAll<HTMLElement>('[role="columnheader"]'))) {
+        expect(isMono(head), `la cabecera «${visible(head)}» no va en mono`).toBe(false);
+      }
+      for (const row of rows(el)) {
+        const rowCells = cells(row);
+        const code = visible(rowCells[codeAt]);
+        expect(rowCells).toHaveLength(names.length);
+        rowCells.forEach((cell, i) => {
+          if (i === eanAt && emptyEanCodes.includes(code)) return; // H3: «—» of an empty EAN, free
+          const expected = MONO_HEADERS.includes(names[i]);
+          expect(isMono(cell), `fila ${code}, columna «${names[i]}»: mono debe ser ${expected}`).toBe(expected);
+        });
+      }
+    }
+
+    it('[EP00-TBR-003-CA1] demo catalog: every «Código» and «EAN» cell carries tb-num and no other cell does', async () => {
+      const { el } = await open();
+
+      expectMonoColumns(el);
+    });
+
+    it('[EP00-TBR-003-CA1] with an empty EAN and supplier: the «—» of «Proveedor» is not mono; the rest keeps the rule', async () => {
+      const seed = [product(1), product(2, { supplier: null, ean: null }), product(3)];
+      const { el } = await open({ seed });
+
+      expect(rows(el)).toHaveLength(3);
+      expectMonoColumns(el, ['SYN0002']);
+    });
+
+  });
 });
 
 describe('[EP00-TBR-003-CA2] catalog screen: load timeout (10 s) and reset of the previous failure', () => {
