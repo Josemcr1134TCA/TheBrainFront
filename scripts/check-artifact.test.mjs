@@ -15,6 +15,9 @@
 // [EP00-TBR-002-CA3] Round 1, phase a2 · L1: the PO, owner of the list (PO-2), approved in Slack (option a, all of it
 // in this story) widening the list with the S5 names and the S4 contents and fixes. Those tests are written before
 // the list and the script change, so the positive ones fail on commit d33a3c8 and the near-miss controls pass.
+// [EP00-TBR-002-CA3] Round 2 adds tests for the round 1 re-review findings approved by the dev: H-1 (stricter S6 rule),
+// H-2/Q12 (JWT hidden behind a failed candidate), H-3/Q13 (keys glued to another word), Q10 (short sk-ant-) and Q14
+// (exception paths that never match). They are written before the fix, so the positive ones fail on commit 21d254f.
 // [EP00-TBR-002-CA1] package.json has typecheck (R1) plus ci:test and artifact:check with the exact text of §8.6.
 // Synthetic secrets are assembled at runtime so no key-like string is committed (RG-4). No real data.
 // Fixtures live under tmp/ (ignored by git) and are removed afterwards.
@@ -424,30 +427,65 @@ describe("[EP00-TBR-002-CA3] forbidden contents (mandatory minimum)", () => {
   // scan is timed (not Node's start-up), so the 2 s bound leaves a wide margin for a slow CI runner.
   const HOSTILE_LIMIT_MS = 2_000;
   const HOSTILE_KILL_MS = 45_000;
+  // Runs scanArtifact with the real list in a child killed after HOSTILE_KILL_MS and times only the scan.
+  const timedScan = (dir, title) => {
+    assert.ok(existsSync(SCRIPT), "no existe el script scripts/check-artifact.mjs");
+    const code = [
+      `const m = await import(${JSON.stringify(pathToFileURL(SCRIPT).href)});`,
+      `const list = m.loadPatternList(${JSON.stringify(LIST)});`,
+      `const t0 = performance.now();`,
+      `const findings = m.scanArtifact(${JSON.stringify(dir)}, list);`,
+      `process.stdout.write(JSON.stringify({ ms: performance.now() - t0, findings }));`,
+    ].join("\n");
+    const r = spawnSync(process.execPath, ["--input-type=module", "-e", code], { cwd: FRONT, encoding: "utf8", timeout: HOSTILE_KILL_MS, killSignal: "SIGKILL", maxBuffer: 64 * 1024 * 1024 });
+    if (r.status === null) assert.fail(`la revisión del archivo hostil (${title}) no terminó en ${HOSTILE_KILL_MS / 1000} s (señal ${r.signal}): la búsqueda de JWT no está acotada`);
+    assert.equal(r.status, 0, `scanArtifact falló con el archivo hostil (${title})\nstderr: ${r.stderr}`);
+    return JSON.parse(r.stdout);
+  };
+  // Round 2 · H-2/Q12 adds ~2 MB of "eyJ." repeated: every dotted triple is a JWT candidate, so testing each one
+  // without skipping must stay linear.
   const HOSTILE = [
     ["~210 KB of repeated eyJ", () => "eyJ".repeat(70_000)],
     ["~210 KB of repeated eyJ split by one dot", () => `${"eyJ".repeat(35_000)}.${"eyJ".repeat(35_000)}`],
+    ["~2 MB of repeated eyJ.", () => "eyJ.".repeat(500_000)],
   ];
   for (const [title, hostile] of HOSTILE) {
     test(`[EP00-TBR-002-CA3] reviews a hostile file (${title}) in under 2 s and still finds the service_role JWT after it`, () => {
-      assert.ok(existsSync(SCRIPT), "no existe el script scripts/check-artifact.mjs");
       const path = "browser/chunk-HOSTILE.js";
       const dir = makeArtifact({ [path]: `${hostile()}\nconst k="${triggerOf("service-role-jwt")}";\n` });
-      const code = [
-        `const m = await import(${JSON.stringify(pathToFileURL(SCRIPT).href)});`,
-        `const list = m.loadPatternList(${JSON.stringify(LIST)});`,
-        `const t0 = performance.now();`,
-        `const findings = m.scanArtifact(${JSON.stringify(dir)}, list);`,
-        `process.stdout.write(JSON.stringify({ ms: performance.now() - t0, findings }));`,
-      ].join("\n");
-      const r = spawnSync(process.execPath, ["--input-type=module", "-e", code], { cwd: FRONT, encoding: "utf8", timeout: HOSTILE_KILL_MS, killSignal: "SIGKILL" });
-      if (r.status === null) assert.fail(`la revisión del archivo hostil no terminó en ${HOSTILE_KILL_MS / 1000} s (señal ${r.signal}): la búsqueda de JWT no está acotada`);
-      assert.equal(r.status, 0, `scanArtifact falló con el archivo hostil\nstderr: ${r.stderr}`);
-      const { ms, findings } = JSON.parse(r.stdout);
+      const { ms, findings } = timedScan(dir, title);
       assert.deepEqual(findings.map((f) => `${f.path}:${f.line}|${f.rule}`), [`${path}:2|service-role-jwt`], `el resultado debe ser exacto: ${JSON.stringify(findings)}`);
       assert.ok(ms < HOSTILE_LIMIT_MS, `revisar el archivo hostil (${title}) tardó ${Math.round(ms)} ms; el límite es ${HOSTILE_LIMIT_MS} ms (la búsqueda de JWT debe ser lineal)`);
     });
   }
+
+  // Round 2 · H-2/Q12: the same ~2 MB of "eyJ." glued by a dot to a service_role JWT on the same line. 500 000 is not a
+  // multiple of 3, so a search that skips two parts after a failed candidate lands past the JWT header and misses it.
+  test("[EP00-TBR-002-CA3] H-2: finds a service_role JWT glued after ~2 MB of eyJ. on the same line, in under 2 s", () => {
+    const path = "browser/chunk-HOSTILE.js";
+    const secret = triggerOf("service-role-jwt");
+    const { ms, findings } = timedScan(makeArtifact({ [path]: `${"eyJ.".repeat(500_000)}${secret}\n` }), "eyJ. glued to the JWT");
+    assert.deepEqual(findings.map((f) => `${f.path}:${f.line}|${f.rule}`), [`${path}:1|service-role-jwt`], `el JWT service_role pegado tras la corrida de eyJ. debe detectarse: ${JSON.stringify(findings)}`);
+    assert.ok(findings[0].sample.startsWith(secret.slice(0, 6)), `sample debe empezar donde empieza el JWT: ${JSON.stringify(findings[0])}`);
+    assert.deepEqual(leakedPieces(JSON.stringify(findings), secret), [], "sample no puede mostrar el secreto");
+    assert.ok(ms < HOSTILE_LIMIT_MS, `revisar el archivo hostil tardó ${Math.round(ms)} ms; el límite es ${HOSTILE_LIMIT_MS} ms (la búsqueda de JWT debe ser lineal)`);
+  });
+
+  // Round 2 · H-2/Q12 (security H-2, quality Q12): a failed candidate must not hide the JWT that starts inside it.
+  // "eyJa.eyJb.<jwt>" and "a.eyJfoo.<jwt>" are found on their own line; the same prefixes before an anon JWT give nothing.
+  test("[EP00-TBR-002-CA3] H-2: finds a service_role JWT hidden after eyJa.eyJb. and after a.eyJfoo., each on its exact line", () => {
+    const scanArtifact = exported("scanArtifact");
+    const list = exported("loadPatternList")(LIST);
+    const secret = triggerOf("service-role-jwt");
+    const anon = jwt({ iss: "supabase", ref: "synthetictestref", role: "anon", iat: 1700000000, exp: 2000000000 });
+    const lead1 = `${"eyJ" + "a"}.${"eyJ" + "b"}.`;
+    const lead2 = `a.${"eyJ" + "foo"}.`;
+    const lines = ["/* synthetic */", `const k="${lead1}${secret}";`, `const a="${lead1}${anon}";`, `const h="${lead2}${secret}";`, `const b="${lead2}${anon}";`];
+    const findings = scanArtifact(makeArtifact({ [MAIN_JS]: `${lines.join("\n")}\n` }), list);
+    assert.deepEqual(findings.map((f) => `${f.path}:${f.line}|${f.rule}`), [2, 4].map((n) => `${MAIN_JS}:${n}|service-role-jwt`), `se esperaba el JWT service_role en las líneas 2 y 4 y nada más: ${JSON.stringify(findings)}`);
+    for (const f of findings) assert.ok(f.sample.startsWith(secret.slice(0, 6)), `sample debe empezar donde empieza el JWT: ${JSON.stringify(f)}`);
+    assert.deepEqual(leakedPieces(JSON.stringify(findings), secret), [], "sample no puede mostrar el secreto");
+  });
 
   // Round 1 re-review · S1: the linear JWT search splits runs of token characters at the dots, so it must still find a
   // service_role JWT that is not alone in its run: after a dotted prefix, after an anon JWT joined by a dot, and glued
@@ -559,6 +597,104 @@ describe("[EP00-TBR-002-CA3] list extension approved by the PO (L1: S4 contents 
     const r = scan(makeArtifact(Object.fromEntries(NEAR_MISS_NAMES.map((p) => [p, "export{};\n"]))));
     assert.equal(r.status, 0, `estos nombres no están prohibidos y deben pasar\n${r.output}`);
     assert.match(r.stdout, CLEAN_RE, r.output);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Round 2 · H-3/Q13 and Q10 (docs/estado/EP00-TBR-002.md, «re-revisión v1»). Written before the fix, on 21d254f.
+// ---------------------------------------------------------------------------------------------
+const R2_GOOGLE = () => "AI" + "za" + "SyntheticGoogleKey" + "0".repeat(17); // AIza + 35
+const R2_AWS = () => "AK" + "IA" + "SYNTHETICTEST" + "012"; // AKIA + 16
+const R2_STRIPE = () => "sk" + "_live_" + "SyntheticStripeKey" + "0".repeat(6); // sk_live_ + 24
+// H-3: keys glued to another word. `line` is the text planted on line 2 of the bundle.
+const R2_GLUED = [
+  { id: "google-api-key", label: "KEY_AIza… (glued after an underscore)", value: R2_GOOGLE, line: (s) => `const k="KEY_${s}";` },
+  { id: "google-api-key", label: "xAIza… (glued after a letter)", value: R2_GOOGLE, line: (s) => `const k="x${s}";` },
+  { id: "aws-access-key-id", label: "K_AKIA… (glued after an underscore)", value: R2_AWS, line: (s) => `const k="K_${s}";` },
+  { id: "aws-access-key-id", label: "AKIA… followed by an alphanumeric", value: R2_AWS, line: (s) => `const k="${s}x";` },
+  { id: "stripe-secret-key", label: "xsk_live_… (glued after a letter)", value: R2_STRIPE, line: (s) => `const k="x${s}";` },
+  { id: "stripe-secret-key", label: "sk_live_…_x (followed by _x)", value: R2_STRIPE, line: (s) => `const k="${s}_x";` },
+];
+// H-3 near misses: prefixes cut short, bodies one character short and AKIA inside a long word without the right
+// length. 0 findings before and after the fix.
+const R2_NEAR_MISS_JS = () =>
+  [
+    "/* synthetic near misses */",
+    `const g=["${"AI" + "z" + "SyntheticGoogleKey" + "0".repeat(18)}","${"AI" + "za" + "SyntheticGoogleKey" + "0".repeat(16)}","KEY_${"AI" + "za" + "Short"}"];`,
+    `const a=["${"K" + "IA" + "SYNTHETICTEST" + "0123"}","${"AK" + "IA" + "SYNTHETICTEST" + "01"}","K_${"AK" + "IA" + "SYNTHETICTEST" + "01"}","MAKIAVELLIANSCHEMEsAndPlots","AKIAVELLIAN","${"AK" + "IA"}bcdefghijklmnopq"];`,
+    `const s=["${"k" + "_live_" + "SyntheticStripeKey" + "0".repeat(6)}","${"sk" + "_live_" + "SyntheticStripeKey0"}","x${"sk" + "_live_" + "SyntheticStripeKey0"}","sk_lives","risk_level"];`,
+    "export{g,a,s};",
+  ].join("\n");
+
+// Q10: "sk-ant-" plus 28 to 31 characters. Expected id: ai-provider-secret-key. Reason: anthropic-api-key keeps the
+// 32-character minimum the PO approved in L1, and these strings already have the shape of ai-provider-secret-key
+// ("sk-" plus at least 32 characters: "ant-" and 28 more); what hides them is only its exclusion of "sk-ant-". The fix
+// proposed in the re-review, (?!ant-[A-Za-z0-9_-]{32,}), gives exactly that: from 28 characters on, one finding.
+const skAnt = (n) => "sk" + "-ant-" + "Synth" + "0".repeat(n - 5);
+
+describe("[EP00-TBR-002-CA3] round 2: keys glued to another word (H-3/Q13) and short sk-ant- (Q10)", () => {
+  // The three patterns as they stand on 21d254f, to prove each case targets a boundary of the current rule.
+  const CURRENT = {
+    "google-api-key": /\bAIza[0-9A-Za-z_-]{35}/u,
+    "aws-access-key-id": /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/u,
+    "stripe-secret-key": /\b[sr]k_(?:live|test)_[0-9A-Za-z]{20,}\b/u,
+  };
+  // The loosest reading, with no boundary at all. The glued cases must have this shape and the near misses must not,
+  // so the controls hold whatever boundary the fix keeps. Note: "xAIza…" and "xsk_live_…" are glued after a letter, so
+  // the (?<![A-Za-z0-9]) recommended by the security review would still miss them; only "K_AKIA…" allows it.
+  const REFERENCE = {
+    "google-api-key": /AIza[0-9A-Za-z_-]{35}/u,
+    "aws-access-key-id": /(?:AKIA|ASIA)[0-9A-Z]{16}/u,
+    "stripe-secret-key": /[sr]k_(?:live|test)_[0-9A-Za-z]{20,}/u,
+  };
+
+  test("[EP00-TBR-002-CA3] self-check: the H-3 cases escape the current patterns, and the near misses and Q10 have the intended shapes", () => {
+    for (const t of R2_GLUED) {
+      assert.doesNotMatch(t.line(t.value()), CURRENT[t.id], `${t.label}: el patrón actual ya lo detecta, el caso no prueba el ajuste`);
+      assert.match(t.line(t.value()), REFERENCE[t.id], `${t.label} no tiene la forma de ${t.id}`);
+    }
+    assert.match(R2_GOOGLE(), /^AIza[0-9A-Za-z_-]{35}$/u);
+    assert.match(R2_AWS(), /^AKIA[0-9A-Z]{16}$/u);
+    assert.match(R2_STRIPE(), /^sk_live_[0-9A-Za-z]{24}$/u);
+    for (const [id, re] of Object.entries(REFERENCE)) {
+      assert.doesNotMatch(R2_NEAR_MISS_JS(), re, `los casos cercanos no deben tener la forma de ${id}`);
+      assert.doesNotMatch(R2_NEAR_MISS_JS(), CURRENT[id], `los casos cercanos no deben tener la forma actual de ${id}`);
+    }
+    for (const n of [28, 29, 30, 31]) assert.equal(skAnt(n).length - "sk-ant-".length, n);
+  });
+
+  for (const t of R2_GLUED) {
+    test(`[EP00-TBR-002-CA3] H-3: fails on ${t.id} glued to another word: ${t.label}, with its line and never the value in full`, () => {
+      const secret = t.value();
+      const r = scan(makeArtifact({ [MAIN_JS]: `/* synthetic bundle */\n${t.line(secret)}\nexport{k};\n` }));
+      assertFinding(r, MAIN_JS, t.id, 2);
+      assert.deepEqual(leakedPieces(r.output, secret), [], `la salida muestra más de ${MAX_SHOWN} caracteres seguidos del secreto sintético`);
+    });
+  }
+
+  test("[EP00-TBR-002-CA3] H-3 control: prefixes cut short, bodies one character short and AKIA inside a long word without the right length give 0 findings", () => {
+    const r = scan(makeArtifact({ "browser/chunk-NEARMISS2.js": R2_NEAR_MISS_JS() }));
+    assert.equal(r.status, 0, `los casos cercanos no son secretos y deben pasar\n${r.output}`);
+    assert.match(r.stdout, CLEAN_RE, r.output);
+  });
+
+  test("[EP00-TBR-002-CA3] Q10: sk-ant- followed by 28 to 31 characters is one ai-provider-secret-key finding per line", () => {
+    const scanArtifact = exported("scanArtifact");
+    const list = exported("loadPatternList")(LIST);
+    const sizes = [28, 29, 30, 31];
+    const lines = ["/* synthetic */", ...sizes.map((n, i) => `const k${i}="${skAnt(n)}";`)];
+    const findings = scanArtifact(makeArtifact({ [MAIN_JS]: `${lines.join("\n")}\n` }), list);
+    assert.deepEqual(findings.map((f) => `${f.line}|${f.rule}`), sizes.map((_, i) => `${i + 2}|ai-provider-secret-key`), `cada sk-ant- corta debe dar un solo hallazgo de ai-provider-secret-key: ${JSON.stringify(findings)}`);
+    for (const n of sizes) assert.deepEqual(leakedPieces(JSON.stringify(findings), skAnt(n)), [], "sample no puede mostrar el secreto");
+  });
+
+  test("[EP00-TBR-002-CA3] Q10 control: sk-ant- followed by 32 or more characters is only anthropic-api-key (no double finding)", () => {
+    const scanArtifact = exported("scanArtifact");
+    const list = exported("loadPatternList")(LIST);
+    const sizes = [32, 33, 40, 95];
+    const lines = ["/* synthetic */", ...sizes.map((n, i) => `const k${i}="${skAnt(n)}";`)];
+    const findings = scanArtifact(makeArtifact({ [MAIN_JS]: `${lines.join("\n")}\n` }), list);
+    assert.deepEqual(findings.map((f) => `${f.line}|${f.rule}`), sizes.map((_, i) => `${i + 2}|anthropic-api-key`), `cada sk-ant- larga debe dar un solo hallazgo, de anthropic-api-key: ${JSON.stringify(findings)}`);
   });
 });
 
@@ -830,6 +966,45 @@ describe("[EP00-TBR-002-CA3] validatePatternList rejects invalid lists", () => {
     test(`[EP00-TBR-002-CA3] accepts a narrow exception path whose last segment names a file (control): ${path}`, () => {
       const validatePatternList = exported("validatePatternList");
       assert.deepEqual(validatePatternList({ ...validList(), exceptions: [exception({ path })] }), [], `la excepción acotada «${path}» debe aceptarse`);
+    });
+  }
+
+  // Round 2 · H-1 (security re-review; new rule approved by the dev): rule (b) gets stricter. The name of the last
+  // segment (before its first ".", a leading "." aside) must hold a run of at least 3 characters [A-Za-z0-9] in a row.
+  // Rule (a) stays: no "**" in the last segment. Every NARROW_EXCEPTIONS and EXCEPTION_SEMANTICS path above already
+  // meets it ("lib-*.js" has exactly 3), so none of them changes.
+  const H1_BROAD = ["**/*-*.js", "**/*-*.*", "**/*e*", "browser/*-*.*", "browser/a*b.js", "browser/ab-*.js", "browser/a-b-c-*.js", "browser/a_b_c-*.js", "browser/.ab*"];
+  for (const path of H1_BROAD) {
+    test(`[EP00-TBR-002-CA3] H-1: rejects an exception whose name has no run of 3 characters [A-Za-z0-9]: ${path}`, () => {
+      const validatePatternList = exported("validatePatternList");
+      const errors = validatePatternList({ ...validList(), exceptions: [exception({ path })] });
+      assert.ok(Array.isArray(errors) && errors.length >= 1, `la excepción «${path}» casi no nombra archivos y debe rechazarse; errores: ${JSON.stringify(errors)}`);
+    });
+  }
+  // Controls: boundary cases at exactly 3 characters pass, and rule (a) still rejects "**" even next to a long name.
+  const H1_NARROW = ["browser/abc-*.js", "browser/*-a1B*.js"];
+  for (const path of H1_NARROW) {
+    test(`[EP00-TBR-002-CA3] H-1 control: accepts an exception whose name holds exactly 3 characters [A-Za-z0-9] in a row: ${path}`, () => {
+      const validatePatternList = exported("validatePatternList");
+      assert.deepEqual(validatePatternList({ ...validList(), exceptions: [exception({ path })] }), [], `la excepción acotada «${path}» debe aceptarse`);
+    });
+  }
+  for (const path of ["browser/vendor-**.js", "browser/**vendor.js"]) {
+    test(`[EP00-TBR-002-CA3] H-1 control: rule (a) still rejects ** in the last segment next to a long name: ${path}`, () => {
+      const validatePatternList = exported("validatePatternList");
+      const errors = validatePatternList({ ...validList(), exceptions: [exception({ path })] });
+      assert.ok(Array.isArray(errors) && errors.length >= 1, `la excepción «${path}» lleva «**» en el último tramo y debe rechazarse; errores: ${JSON.stringify(errors)}`);
+    });
+  }
+
+  // Round 2 · Q14: paths are matched as written against "browser/…" relative paths with no trim, so an exception with
+  // spaces around it, or that starts with "/" or "./", never matches and must be rejected instead of accepted in silence.
+  const NEVER_MATCHING = [" browser/vendor-*.js", "browser/vendor-*.js ", "/browser/vendor-*.js", "./browser/vendor-*.js"];
+  for (const path of NEVER_MATCHING) {
+    test(`[EP00-TBR-002-CA3] Q14: rejects an exception path that can never match: «${path}»`, () => {
+      const validatePatternList = exported("validatePatternList");
+      const errors = validatePatternList({ ...validList(), exceptions: [exception({ path })] });
+      assert.ok(Array.isArray(errors) && errors.length >= 1, `la excepción «${path}» nunca coincide con una ruta del artefacto y debe rechazarse; errores: ${JSON.stringify(errors)}`);
     });
   }
 });
