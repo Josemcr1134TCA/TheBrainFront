@@ -15,6 +15,7 @@
       loadingLabel="Cargando productos"
       [texts]="texts()"
       (retry)="onRetry()"
+      (loadTimeout)="onLoadTimeout()"
       (secondaryAction)="first()"
     >
       <ng-template tbCell="ean" let-row>

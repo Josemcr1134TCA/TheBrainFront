@@ -54,9 +54,9 @@ export class ProductListPage implements OnDestroy {
   protected readonly itemLabel: TbItemLabel = { one: 'producto', other: 'productos' };
 
   protected readonly columns: readonly TbColumn<Product>[] = [
-    { id: 'code', track: '104px', header: 'Código', type: 'text', value: (p) => p.code },
+    { id: 'code', track: '104px', header: 'Código', type: 'text', mono: true, value: (p) => p.code },
     { id: 'name', track: '200px', header: 'Nombre', type: 'text', value: (p) => p.name },
-    { id: 'ean', track: '140px', header: 'EAN', type: 'text', value: (p) => p.ean },
+    { id: 'ean', track: '140px', header: 'EAN', type: 'text', mono: true, value: (p) => p.ean },
     { id: 'brand', track: '130px', header: 'Marca', type: 'text', value: (p) => p.brand },
     { id: 'supplier', track: '160px', header: 'Proveedor', type: 'text', value: (p) => p.supplier?.name },
     { id: 'presentation', track: '130px', header: 'Presentación', type: 'text', value: (p) => p.presentation },
@@ -141,6 +141,14 @@ export class ProductListPage implements OnDestroy {
       default:
         return { actionLabel: null };
     }
+  }
+
+  /** The table gave up waiting (10 s): move to the error state so the next request restarts the loading phase. */
+  protected onLoadTimeout(): void {
+    this.running?.unsubscribe();
+    this.items.set([]);
+    this.failure.set(null);
+    this.state.set('error');
   }
 
   private request(request: Request): void {
