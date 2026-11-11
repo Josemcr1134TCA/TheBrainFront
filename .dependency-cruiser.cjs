@@ -29,10 +29,10 @@ module.exports = {
     },
     {
       name: "ui-public-api",
-      comment: "src/app/ imports the design system only through its public API (src/ui/index.ts), never its internals (DA-3, EP00-TBR-004).",
+      comment: "Anything in src/ outside src/ui/ imports the design system only through its public API (src/ui/index.ts, plus the generated tokens/), never its internals (DA-3, EP00-TBR-004).",
       severity: "error",
-      from: { path: "^src/app/" },
-      to: { path: "^src/ui/", pathNot: "^src/ui/index\\.ts$" },
+      from: { path: "^src/", pathNot: "^src/ui/" },
+      to: { path: "^src/ui/", pathNot: "^src/ui/(index\\.ts|tokens/)" },
     },
     {
       name: "no-backend-in-front",
