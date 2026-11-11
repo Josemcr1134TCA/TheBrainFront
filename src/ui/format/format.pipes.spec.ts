@@ -19,12 +19,14 @@ const DASH = '—';
     <span id="pct">{{ pct | tbPercent }}</span>
     <span id="date-this-year">{{ thisYear | tbDate }}</span>
     <span id="date-other-year">{{ otherYear | tbDate }}</span>
-    <span id="date-null">{{ missing | tbDate }}</span>
+    <span id="date-null">{{ missingDate | tbDate }}</span>
   `,
 })
 class FormatPipesHost {
   amount = 1234.5;
   missing: number | null = null;
+  // [EP00-TBR-004-CA2] H3: a missing date is a string or null, never a number.
+  missingDate: string | null = null;
   qty = 1234;
   pct = 24.5;
   thisYear = '2026-10-09';
@@ -72,6 +74,23 @@ describe('[EP00-TBR-004-CA2] format pipes', () => {
     const text = render('2026-01-01T05:00:00Z');
     expect(text('date-other-year')).toBe('30 sep');
     expect(text('date-this-year')).toBe('9-oct-2026');
+  });
+});
+
+describe('[EP00-TBR-004-CA2] TbDatePipe input type (H3)', () => {
+  it('[EP00-TBR-004-CA2] shows «—» for a null date', () => {
+    const text = render('2026-11-11T18:00:00Z');
+    expect(text('date-null')).toBe(DASH);
+  });
+
+  it('[EP00-TBR-004-CA2] does not accept a number: a mistyped date fails at compile time instead of showing «—»', () => {
+    // Type check only: never called. If TbDatePipe accepted number again, the directive below would be unused and
+    // this file would not compile.
+    const typeCheckOnly = (pipe: TbDatePipe) => {
+      // @ts-expect-error H3: a number is not a date for tbDate.
+      return pipe.transform(20261009);
+    };
+    expect(typeof typeCheckOnly).toBe('function');
   });
 });
 

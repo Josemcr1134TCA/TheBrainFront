@@ -4,7 +4,7 @@
 // the click when the key was not cancelled.
 import { Component } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
-import { TbTabs } from './tabs';
+import { TbTab, TbTabs } from './tabs';
 
 const THEMES = ['light', 'dark'] as const;
 
@@ -43,7 +43,8 @@ function activate(el: HTMLElement, k: 'Enter' | ' ') {
   `,
 })
 class TabsHost {
-  tabs = [
+  // [EP00-TBR-004-CA3] H4: typed with TbTab, so badge.tone is the closed union of the v6 tones.
+  tabs: TbTab[] = [
     { id: 'general', label: 'General' },
     { id: 'prices', label: 'Precios', count: 1234 },
     { id: 'history', label: 'Historial', badge: { count: 3, tone: 'accent' } },
@@ -212,5 +213,23 @@ describe('[EP00-TBR-004-CA3] TbTabs with an invalid selection', () => {
     expect(first.getAttribute('aria-selected')).toBe('true');
     expect(first.getAttribute('tabindex')).toBe('0');
     expect(emitted).toEqual(['general']);
+  });
+});
+
+describe('[EP00-TBR-004-CA3] TbTab badge tone is a closed union (H4)', () => {
+  it('[EP00-TBR-004-CA3] accepts the v6 tones and rejects a misspelled tone at compile time', () => {
+    const tones: TbTab[] = [
+      { id: 'a', label: 'Acento', badge: { count: 1, tone: 'accent' } },
+      { id: 'm', label: 'Neutro', badge: { count: 2, tone: 'mute' } },
+      { id: 'b', label: 'Error', badge: { count: 3, tone: 'bad' } },
+    ];
+    const misspelled: TbTab = {
+      id: 'typo',
+      label: 'Errata',
+      // @ts-expect-error H4: «acent» is not a badge tone; with an open string type it would compile and fall to accent.
+      badge: { count: 1, tone: 'acent' },
+    };
+    expect(tones.map((t) => t.badge?.tone)).toEqual(['accent', 'mute', 'bad']);
+    expect(misspelled.id).toBe('typo');
   });
 });

@@ -325,6 +325,28 @@ describe('[EP00-TBR-004-CA3] TbFilterSelect, one open panel at a time (edge case
     expect(isOpen('first')).toBe(false);
   });
 
+  it('[EP00-TBR-004-CA3] one click outside runs the outside handler once (a single document listener)', () => {
+    const proto = TbFilterSelect.prototype as unknown as Record<string, unknown>;
+    expect(typeof proto['onOutside']).toBe('function');
+    const spy = vi.spyOn(proto as { onOutside: (e: Event) => void }, 'onOutside');
+    try {
+      const { fixture, root, triggerOf, isOpen } = render2();
+      triggerOf('first').click();
+      fixture.detectChanges();
+      spy.mockClear();
+      const outside = root.querySelector('#outside') as HTMLButtonElement;
+      // The sequence a browser fires for one click with the mouse.
+      for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'])
+        outside.dispatchEvent(new MouseEvent(type, { bubbles: true }));
+      fixture.detectChanges();
+      // Two FilterSelect on the page: each one handles the click once.
+      expect(spy).toHaveBeenCalledTimes(2);
+      expect(isOpen('first')).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('[EP00-TBR-004-CA3] two-way binding updates the caller with the new selection', () => {
     const { fixture, part, triggerOf } = render2();
     triggerOf('first').click();
