@@ -136,6 +136,10 @@ export function validatePatternList(list) {
     if (typeof exception.path !== "string" || !exception.path.trim()) errors.push(`${label}: falta la ruta (path)`);
     else if (exception.path !== exception.path.trim()) errors.push(`${label}: la ruta «${exception.path}» no puede llevar espacios al inicio ni al final`);
     else if (exception.path.startsWith("/") || exception.path.startsWith("./")) errors.push(`${label}: la ruta «${exception.path}» debe ser relativa al artefacto, sin «/» ni «./» al inicio`);
+    else if (exception.path.includes("\\")) errors.push(`${label}: la ruta «${exception.path}» lleva «\\»; separe los tramos con «/»`);
+    else if (exception.path.startsWith("dist/")) errors.push(`${label}: la ruta «${exception.path}» empieza por «dist/»; debe ser relativa a dist/the-brain-front/ (por ejemplo «browser/main-*.js»)`);
+    else if (exception.path.split("/").includes("")) errors.push(`${label}: la ruta «${exception.path}» tiene un tramo vacío («//» o «/» al final); quite la barra sobrante`);
+    else if (exception.path.split("/").some((part) => part === "." || part === "..")) errors.push(`${label}: la ruta «${exception.path}» tiene un tramo «.» o «..»; escriba la ruta directa desde el artefacto`);
     else if (PURE_WILDCARD_RE.test(exception.path)) errors.push(`${label}: la ruta «${exception.path}» es un comodín puro`);
     else if (exceptionPathTooBroad(exception.path)) errors.push(`${label}: la ruta «${exception.path}» exime demasiado; el último tramo debe nombrar archivos (sin «**» y con al menos 3 letras o dígitos seguidos antes del primer punto)`);
     if (typeof exception.reason !== "string" || !exception.reason.trim()) errors.push(`${label}: falta el motivo (reason)`);
@@ -233,11 +237,27 @@ function scanDetailed(dir, list) {
         findings.push({ rule: "unreadable", path, line: 0, sample: "no se pudo leer el archivo" });
         continue;
       }
+      // Line numbers: positions of "\n" computed once per file, then a binary search per match.
+      let newlines = null;
+      const lineOf = (index) => {
+        if (!newlines) {
+          newlines = [];
+          for (let at = text.indexOf("\n"); at !== -1; at = text.indexOf("\n", at + 1)) newlines.push(at);
+        }
+        let lo = 0;
+        let hi = newlines.length;
+        while (lo < hi) {
+          const mid = (lo + hi) >>> 1;
+          if (newlines[mid] < index) lo = mid + 1;
+          else hi = mid;
+        }
+        return lo + 1;
+      };
       for (const rule of list.contents) {
         if (exceptions.some((e) => e.rule === rule.id && e.re.test(path))) continue;
         const reported = new Set();
         for (const match of contentMatches(rule, text)) {
-          const line = text.slice(0, match.index).split("\n").length;
+          const line = lineOf(match.index);
           if (reported.has(line)) continue;
           reported.add(line);
           findings.push({ rule: rule.id, path, line, sample: mask(match.text) });
