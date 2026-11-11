@@ -14,6 +14,7 @@ import { TbButton } from '../button/button';
 import { TbIcon, TbIconName } from '../icon/icon';
 
 export type TbEmptyVariant = 'empty' | 'no-results' | 'forbidden' | 'offline' | 'error';
+export type TbEmptyActionVariant = 'default' | 'primary';
 
 const VARIANTS: Record<
   TbEmptyVariant,
@@ -33,7 +34,9 @@ const VARIANTS: Record<
  * Inputs: variant (empty, no-results, forbidden, offline, error), heading, message, actionLabel,
  * focusActionOnShow (the action takes the focus when it appears; only when the person just triggered the load).
  * Default action: no-results -> "Limpiar filtros", offline and error -> "Reintentar", the others none.
- * At most one action. Output: action().
+ * actionVariant: 'default' (tb-btn, as in 004) or 'primary' (tb-btn primary). secondaryActionLabel: a ghost tb-btn after the
+ * primary in the same .acts row; it is not painted without a primary action (D-052).
+ * One primary action and at most one secondary. Outputs: action(), secondaryAction().
  * ARIA: role="alert" for error and offline; role="status" for empty, no-results and forbidden (PQ-5, the v6 does not
  * define forbidden). The icon is decorative (aria-hidden).
  * It does not retry, clear or navigate: the caller handles action().
@@ -56,7 +59,10 @@ const VARIANTS: Record<
     <p>{{ message() }}</p>
     @if (label(); as text) {
       <div class="acts">
-        <button tb-button #actionButton (click)="action.emit()">{{ text }}</button>
+        <button tb-button #actionButton [variant]="actionVariant() === 'primary' ? 'primary' : 'secondary'" (click)="action.emit()">{{ text }}</button>
+        @if (secondaryActionLabel(); as secondaryText) {
+          <button tb-button variant="ghost" (click)="secondaryAction.emit()">{{ secondaryText }}</button>
+        }
       </div>
     }
   `,
@@ -75,8 +81,11 @@ export class TbEmptyState {
   readonly heading = input.required<string>();
   readonly message = input.required<string>();
   readonly actionLabel = input<string | undefined>(undefined);
+  readonly actionVariant = input<TbEmptyActionVariant>('default');
+  readonly secondaryActionLabel = input<string | undefined>(undefined);
   readonly focusActionOnShow = input(false, { transform: booleanAttribute });
   readonly action = output<void>();
+  readonly secondaryAction = output<void>();
 
   private readonly actionButton = viewChild('actionButton', { read: ElementRef });
 

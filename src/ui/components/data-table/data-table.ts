@@ -15,7 +15,7 @@ import { NgTemplateOutlet } from '@angular/common';
 import { TB_CLOCK } from '../../format/clock';
 import { NULL_DISPLAY, formatDate, formatMoney, formatPercent, formatQuantity } from '../../format/format';
 import { TbButton } from '../button/button';
-import { TbEmptyState, TbEmptyVariant } from '../empty-state/empty-state';
+import { TbEmptyActionVariant, TbEmptyState, TbEmptyVariant } from '../empty-state/empty-state';
 import { TbIcon } from '../icon/icon';
 import { TbItemLabel } from '../filter-select/filter-select';
 import { createLoadingPhase } from '../skeleton/loading-phase';
@@ -50,6 +50,10 @@ export interface TbTableText {
   readonly heading: string;
   readonly message: string;
   readonly actionLabel?: string;
+  /** 'primary' paints the action as tb-btn primary; by default it is the 004 button. */
+  readonly actionVariant?: TbEmptyActionVariant;
+  /** Ghost action after the primary one; it emits secondaryAction with the variant. */
+  readonly secondaryActionLabel?: string;
 }
 
 /** One entry per EmptyState variant the table can show. */
@@ -111,7 +115,10 @@ const STATUS_VALUES: Record<TbStatusValue, true> = {
  * Inputs: title, columns, rows, rowKey, state ('loading' | 'ready' | 'error' | 'offline' | 'forbidden'), sort,
  * searchTerm, searchLabel, searchPlaceholder, filtersActive, itemLabel, count (by default rows.length; the caller
  * decides with cursor pagination), note, loadingLabel, texts (one entry per EmptyState variant), rowsActivatable.
- * Outputs: sortChange, searchChange, clearFilters, retry, loadTimeout, rowActivate, emptyAction.
+ * Outputs: sortChange, searchChange, clearFilters, retry, loadTimeout, rowActivate, emptyAction, secondaryAction.
+ * searchable (true by default): with false there is no filter bar nor search box and searchLabel is not needed (D-052).
+ * Footer: content with [tbFooter] (e.g. tb-cursor-pager) replaces the table count and note, so the count shows once.
+ * texts[variant].actionVariant and .secondaryActionLabel go to the EmptyState.
  * Own cell: ng-template tbCell="columnId" (see TbCellDef).
  * Loading: aria-busy from the first instant; for 300 ms it keeps what was there, then the skeleton replaces it all
  * (never mixed with old rows); at 10 s it becomes the error EmptyState with "Reintentar" and emits loadTimeout once.
@@ -136,7 +143,7 @@ const STATUS_VALUES: Record<TbStatusValue, true> = {
         <div class="tools"><ng-content select="[tbActions]" /></div>
       </header>
     }
-    @if (state() !== 'forbidden') {
+    @if (searchable() && state() !== 'forbidden') {
       <div class="tb-filterbar">
         <div class="tb-filters">
           <ng-content select="tb-filter-select" />
@@ -175,7 +182,10 @@ const STATUS_VALUES: Record<TbStatusValue, true> = {
               [heading]="text.heading"
               [message]="text.message"
               [actionLabel]="text.actionLabel"
+              [actionVariant]="text.actionVariant ?? 'default'"
+              [secondaryActionLabel]="text.secondaryActionLabel"
               (action)="onEmptyAction()"
+              (secondaryAction)="secondaryAction.emit(emptyVariant())"
             />
           }
         }
@@ -183,10 +193,12 @@ const STATUS_VALUES: Record<TbStatusValue, true> = {
     </div>
     @if (showFooter()) {
       <footer class="tb-dt-foot">
-        &ngsp;<span>{{ countText() }}</span>
-        @if (note()) {
-          <span class="tb-dt-note">{{ note() }}</span>
-        }
+        <ng-content select="[tbFooter]">
+          &ngsp;<span>{{ countText() }}</span>
+          @if (note()) {
+            <span class="tb-dt-note">{{ note() }}</span>
+          }
+        </ng-content>
       </footer>
     }
     <div class="tb-sr" role="status">{{ announcement() }}</div>
@@ -292,7 +304,8 @@ export class TbDataTable<T = any> {
   readonly state = input<TbTableState>('ready');
   readonly sort = input<TbSort | null>(null);
   readonly searchTerm = input('');
-  readonly searchLabel = input.required<string>();
+  readonly searchable = input(true, { transform: booleanAttribute });
+  readonly searchLabel = input<string | undefined>(undefined);
   readonly searchPlaceholder = input<string | undefined>(undefined);
   readonly filtersActive = input(false, { transform: booleanAttribute });
   readonly itemLabel = input.required<TbItemLabel>();
@@ -309,6 +322,7 @@ export class TbDataTable<T = any> {
   readonly loadTimeout = output<void>();
   readonly rowActivate = output<T>();
   readonly emptyAction = output<TbEmptyVariant>();
+  readonly secondaryAction = output<TbEmptyVariant>();
 
   private readonly cellDefs = contentChildren(TbCellDef);
   private readonly phase = createLoadingPhase(() => this.state() === 'loading', {
