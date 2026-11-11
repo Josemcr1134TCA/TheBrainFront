@@ -10,6 +10,7 @@ export type TbIconName =
   | 'alert'
   | 'check-circle'
   | 'chevron-down'
+  | 'chevron-right'
   | 'chevron-up'
   | 'arrow-down'
   | 'sort'
@@ -33,6 +34,7 @@ const circle = (cx: number, cy: number, r: number): Shape => ({ circle: [cx, cy,
 const SHAPES: Record<TbIconName, readonly Shape[]> = {
   x: [path('M18 6 6 18'), path('m6 6 12 12')],
   'chevron-down': [path('m6 9 6 6 6-6')],
+  'chevron-right': [path('m9 18 6-6-6-6')],
   'chevron-up': [path('m18 15-6-6-6 6')],
   sort: [path('m7 15 5 5 5-5'), path('m7 9 5-5 5 5')],
   'arrow-down': [path('M12 5v14'), path('m19 12-7 7-7-7')],

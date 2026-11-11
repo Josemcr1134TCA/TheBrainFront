@@ -15,7 +15,7 @@ import { NgTemplateOutlet } from '@angular/common';
 import { TB_CLOCK } from '../../format/clock';
 import { NULL_DISPLAY, formatDate, formatMoney, formatPercent, formatQuantity } from '../../format/format';
 import { TbButton } from '../button/button';
-import { TbEmptyState, TbEmptyVariant } from '../empty-state/empty-state';
+import { TbEmptyActionVariant, TbEmptyState, TbEmptyVariant } from '../empty-state/empty-state';
 import { TbIcon } from '../icon/icon';
 import { TbItemLabel } from '../filter-select/filter-select';
 import { createLoadingPhase } from '../skeleton/loading-phase';
@@ -43,13 +43,23 @@ export interface TbColumn<T = any> {
   readonly sortable?: boolean;
   /** Track of the grid for this column. By default minmax(0,1fr). */
   readonly track?: string;
+  /** Cells (not the header) get tb-num: mono font and tabular figures. The value shows as text (D-055). */
+  readonly mono?: boolean;
 }
 
 /** Heading, message and optional action label of one EmptyState variant. */
 export interface TbTableText {
   readonly heading: string;
-  readonly message: string;
-  readonly actionLabel?: string;
+  /** A text or a list of texts, one paragraph each. */
+  readonly message: string | readonly string[];
+  /** Identifier painted last as "Referencia: id". */
+  readonly reference?: string;
+  /** null: no action and no secondary, not even in error or offline. */
+  readonly actionLabel?: string | null;
+  /** 'primary' paints the action as tb-btn primary; by default it is the 004 button. */
+  readonly actionVariant?: TbEmptyActionVariant;
+  /** Ghost action after the primary one; it emits secondaryAction with the variant. */
+  readonly secondaryActionLabel?: string;
 }
 
 /** One entry per EmptyState variant the table can show. */
@@ -78,6 +88,7 @@ interface CellView {
   readonly mute: boolean;
   readonly num: boolean;
   readonly mono: boolean;
+  readonly tbNum: boolean;
   readonly value: unknown;
 }
 
@@ -111,7 +122,10 @@ const STATUS_VALUES: Record<TbStatusValue, true> = {
  * Inputs: title, columns, rows, rowKey, state ('loading' | 'ready' | 'error' | 'offline' | 'forbidden'), sort,
  * searchTerm, searchLabel, searchPlaceholder, filtersActive, itemLabel, count (by default rows.length; the caller
  * decides with cursor pagination), note, loadingLabel, texts (one entry per EmptyState variant), rowsActivatable.
- * Outputs: sortChange, searchChange, clearFilters, retry, loadTimeout, rowActivate, emptyAction.
+ * Outputs: sortChange, searchChange, clearFilters, retry, loadTimeout, rowActivate, emptyAction, secondaryAction.
+ * searchable (true by default): with false there is no filter bar nor search box and searchLabel is not needed (D-052).
+ * Footer: content with [tbFooter] (e.g. tb-cursor-pager) replaces the table count and note, so the count shows once.
+ * texts[variant].actionVariant and .secondaryActionLabel go to the EmptyState.
  * Own cell: ng-template tbCell="columnId" (see TbCellDef).
  * Loading: aria-busy from the first instant; for 300 ms it keeps what was there, then the skeleton replaces it all
  * (never mixed with old rows); at 10 s it becomes the error EmptyState with "Reintentar" and emits loadTimeout once.
@@ -120,8 +134,10 @@ const STATUS_VALUES: Record<TbStatusValue, true> = {
  * invisible role="status" region announces the count when rows are shown.
  * The action of an EmptyState emits retry (error and offline), clearFilters (no-results) or emptyAction (the others).
  *
- * It does NOT sort, filter, paginate or fetch: it emits and the caller decides (DEC-0012). No column menu, CSV, pinned
- * columns, density, selection or pagination (PQ-2).
+ * It does NOT sort, filter, paginate or fetch: it emits and the caller decides (DEC-0012). stickyColumns (0, 1 or 2) fixes the first columns on
+ * the left; density ('default' | 'dense') compacts the rows; texts[variant].actionLabel null shows no action and message
+ * accepts a list of paragraphs plus reference (D-054).
+ * column.mono (true) puts tb-num on the cells of that column, not the header (D-055). No column menu, CSV, selection or pagination (PQ-2).
  */
 @Component({
   selector: 'tb-data-table',
@@ -136,7 +152,7 @@ const STATUS_VALUES: Record<TbStatusValue, true> = {
         <div class="tools"><ng-content select="[tbActions]" /></div>
       </header>
     }
-    @if (state() !== 'forbidden') {
+    @if (searchable() && state() !== 'forbidden') {
       <div class="tb-filterbar">
         <div class="tb-filters">
           <ng-content select="tb-filter-select" />
@@ -174,8 +190,12 @@ const STATUS_VALUES: Record<TbStatusValue, true> = {
               [variant]="emptyVariant()"
               [heading]="text.heading"
               [message]="text.message"
+              [reference]="text.reference"
               [actionLabel]="text.actionLabel"
+              [actionVariant]="text.actionVariant ?? 'default'"
+              [secondaryActionLabel]="text.secondaryActionLabel"
               (action)="onEmptyAction()"
+              (secondaryAction)="secondaryAction.emit(emptyVariant())"
             />
           }
         }
@@ -183,17 +203,19 @@ const STATUS_VALUES: Record<TbStatusValue, true> = {
     </div>
     @if (showFooter()) {
       <footer class="tb-dt-foot">
-        &ngsp;<span>{{ countText() }}</span>
-        @if (note()) {
-          <span class="tb-dt-note">{{ note() }}</span>
-        }
+        <ng-content select="[tbFooter]">
+          &ngsp;<span>{{ countText() }}</span>
+          @if (note()) {
+            <span class="tb-dt-note">{{ note() }}</span>
+          }
+        </ng-content>
       </footer>
     }
     <div class="tb-sr" role="status">{{ announcement() }}</div>
 
     <ng-template #grid>
-      <div class="tb-hscroll">
-        <div role="table" class="tb-list" [attr.aria-label]="title() || null">
+      <div class="tb-hscroll" [class.stick1]="stickyColumns() >= 1" [class.stick2]="stickyColumns() === 2" [style.--stick2]="stick2()">
+        <div role="table" class="tb-list" [class.dense]="density() === 'dense'" [attr.aria-label]="title() || null">
           <div role="row" class="tb-head-row" [style.--cols]="cols()">
             @for (column of columns(); track column.id) {
               <div
@@ -228,7 +250,7 @@ const STATUS_VALUES: Record<TbStatusValue, true> = {
                 (keydown.space)="onRowKey(item.row, $event)"
               >
                 @for (cell of item.cells; track cell.id) {
-                  <div role="cell" class="cellt" [class.num]="cell.num" [class.r]="cell.num" [class.m]="cell.mono" [class.mute]="cell.mute">
+                  <div role="cell" class="cellt" [class.num]="cell.num" [class.r]="cell.num" [class.m]="cell.mono" [class.tb-num]="cell.tbNum" [class.mute]="cell.mute">
                     @if (customCell(cell.id); as def) {
                       <ng-container *ngTemplateOutlet="def.template; context: { $implicit: item.row, value: cell.value }" />
                     } @else if (cell.status) {
@@ -257,6 +279,13 @@ const STATUS_VALUES: Record<TbStatusValue, true> = {
     .tb-find input { all: unset; flex: 1; min-width: 0; font: 400 13px/1 var(--font-sans); color: var(--color-ink); }
     .tb-find input::placeholder { color: var(--color-ink-muted); }
     .tb-hscroll { overflow-x: auto; }
+    .tb-hscroll.stick1 > div, .tb-hscroll.stick2 > div { min-width: max-content; }
+    .tb-hscroll .tb-head-row { position: static; }
+    .tb-hscroll.stick1 .tb-row > :nth-child(1), .tb-hscroll.stick1 .tb-head-row > :nth-child(1) { position: sticky; left: 0; z-index: 2; background: var(--color-surface); }
+    .tb-hscroll.stick2 .tb-row > :nth-child(2), .tb-hscroll.stick2 .tb-head-row > :nth-child(2) { position: sticky; left: var(--stick2, 68px); z-index: 2; background: var(--color-surface); box-shadow: 1px 0 0 var(--color-line); }
+    .tb-hscroll.stick1:not(.stick2) .tb-row > :nth-child(1), .tb-hscroll.stick1:not(.stick2) .tb-head-row > :nth-child(1) { box-shadow: 1px 0 0 var(--color-line); }
+    .tb-hscroll.stick1 .tb-row:hover > :nth-child(1), .tb-hscroll.stick2 .tb-row:hover > :nth-child(2) { background: var(--color-surface-hover); }
+    @media (max-width: 760px) { .tb-hscroll .tb-row > :nth-child(1), .tb-hscroll .tb-row > :nth-child(2), .tb-hscroll .tb-head-row > :nth-child(1), .tb-hscroll .tb-head-row > :nth-child(2) { position: static; box-shadow: none; } }
     .tb-head-row, .tb-row { display: grid; grid-template-columns: var(--cols); align-items: center; column-gap: var(--spacing-3); padding: 0 var(--spacing-4); }
     .tb-head-row { height: 36px; font: 500 12px/16px var(--font-sans); color: var(--color-ink-muted); border-bottom: 1px solid var(--color-line); }
     .tb-head-row > * { position: relative; min-width: 0; white-space: nowrap; }
@@ -269,12 +298,14 @@ const STATUS_VALUES: Record<TbStatusValue, true> = {
     .tb-head-row [aria-sort] .th { color: var(--color-ink); }
     .tb-head-row .th.r { justify-content: flex-end; }
     .tb-row { position: relative; min-height: var(--size-row); padding-top: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--color-line); outline: none; transition: background-color var(--motion-duration-fast) ease; }
+    .tb-list.dense .tb-row { min-height: 44px; padding-top: 6px; padding-bottom: 6px; }
     .tb-list > .tb-row:last-child { border-bottom: 0; }
     .tb-row.act { cursor: pointer; }
     .tb-row.act:hover { background: var(--color-surface-hover); }
     .tb-row.act:focus-visible::before { content: ""; position: absolute; left: 0; top: 6px; bottom: 6px; width: 2px; border-radius: 2px; background: var(--color-focus); }
     .cellt { font: 400 13px/18px var(--font-sans); color: var(--color-ink-2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .cellt.m { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+    .tb-dt .tb-num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
     .cellt.r { text-align: right; }
     .cellt.mute { color: var(--color-ink-muted); }
     .tb-dt-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-4); padding: 10px var(--spacing-4); border-top: 1px solid var(--color-line); font: 400 12px/16px var(--font-sans); color: var(--color-ink-muted); }
@@ -292,7 +323,8 @@ export class TbDataTable<T = any> {
   readonly state = input<TbTableState>('ready');
   readonly sort = input<TbSort | null>(null);
   readonly searchTerm = input('');
-  readonly searchLabel = input.required<string>();
+  readonly searchable = input(true, { transform: booleanAttribute });
+  readonly searchLabel = input<string | undefined>(undefined);
   readonly searchPlaceholder = input<string | undefined>(undefined);
   readonly filtersActive = input(false, { transform: booleanAttribute });
   readonly itemLabel = input.required<TbItemLabel>();
@@ -301,6 +333,8 @@ export class TbDataTable<T = any> {
   readonly loadingLabel = input.required<string>();
   readonly texts = input.required<TbTableTexts>();
   readonly rowsActivatable = input(false, { transform: booleanAttribute });
+  readonly stickyColumns = input<0 | 1 | 2>(0);
+  readonly density = input<'default' | 'dense'>('default');
 
   readonly sortChange = output<TbSort>();
   readonly searchChange = output<string>();
@@ -309,6 +343,7 @@ export class TbDataTable<T = any> {
   readonly loadTimeout = output<void>();
   readonly rowActivate = output<T>();
   readonly emptyAction = output<TbEmptyVariant>();
+  readonly secondaryAction = output<TbEmptyVariant>();
 
   private readonly cellDefs = contentChildren(TbCellDef);
   private readonly phase = createLoadingPhase(() => this.state() === 'loading', {
@@ -345,6 +380,13 @@ export class TbDataTable<T = any> {
       .map((c) => c.track ?? 'minmax(0,1fr)')
       .join(' '),
   );
+
+  /** With two fixed columns: width of the first (when it is in px) plus the column gap; otherwise the kit fallback applies. */
+  protected readonly stick2 = computed(() => {
+    if (this.stickyColumns() !== 2) return null;
+    const track = this.columns()[0]?.track?.trim() ?? '';
+    return /^\d+(\.\d+)?px$/.test(track) ? `calc(${track} + var(--spacing-3))` : null;
+  });
 
   protected readonly view = computed<readonly RowView<T>[]>(() => {
     const columns = this.columns();
@@ -421,7 +463,7 @@ export class TbDataTable<T = any> {
   private cellOf(column: TbColumn<T>, row: T): CellView {
     const value = column.value(row);
     const num = this.isNumeric(column);
-    const base = { id: column.id, value, num, mono: num, status: null, mute: false };
+    const base = { id: column.id, value, num, mono: num, tbNum: column.mono === true, status: null, mute: false };
     if (value === null || value === undefined || value === '') {
       return { ...base, text: NULL_DISPLAY, mute: true };
     }

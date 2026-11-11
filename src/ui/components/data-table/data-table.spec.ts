@@ -938,3 +938,819 @@ describe('[EP00-TBR-004-CA1] design system public API (src/ui/index.ts)', () => 
     expect(names.filter((n) => /icon|loadingphase|chip|search/i.test(n))).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------------
+// [EP00-TBR-003-CA2][EP00-TBR-003-CA3] Extensions G1 to G3 for the Catálogo screen (task T3, black box, before T4).
+// Sources: docs/ui/EP00-TBR-003/index.html (states normal, pagina-2, ultima-pagina, cargando, vacio, error-validation)
+// and propuesta.md §3 to §5; plan G1 to G4 in docs/estado/EP00-TBR-003.md.
+// API proposed for the T4 contract:
+//   G1 input searchable (boolean, default true). With false there is no .tb-filterbar, .tb-find nor search box, and
+//      searchLabel is not needed. Angular has no conditionally required input, so the assumption is that searchLabel
+//      becomes optional (input<string | undefined>) and the 004 callers keep passing it.
+//   G2 content projection with the selector [tbFooter], inside the table footer. Without it the footer is the 004 one.
+//      The approved UI has no list footer in loading, empty or error states, so the projected content follows the footer.
+//   G3 TbTableText gains an optional secondaryActionLabel; the table forwards it to its EmptyState and emits
+//      secondaryAction with the variant (TbEmptyVariant). Without it everything stays as in 004.
+// The new members do not exist before T4. They are reached through setInput and outputOf() so that this file keeps
+// compiling and the 004 tests above keep running; the new tests fail at runtime for the missing API.
+// ---------------------------------------------------------------------------------------------------------------------
+interface OutputLike<T> {
+  subscribe(fn: (value: T) => void): unknown;
+}
+
+function outputOf<T>(component: unknown, name: string): OutputLike<T> | undefined {
+  const candidate = (component as Record<string, unknown>)[name] as OutputLike<T> | undefined;
+  return candidate && typeof candidate.subscribe === 'function' ? candidate : undefined;
+}
+
+const filterBar = (el: HTMLElement) => el.querySelector('.tb-filterbar');
+const findBox = (el: HTMLElement) => el.querySelector('.tb-find');
+
+describe('[EP00-TBR-003-CA3] G1 TbDataTable without search box (searchable)', () => {
+  it('[EP00-TBR-003-CA3] by default the filter bar and the search box are there, as in 004', () => {
+    const { el } = render({ rows: makeRows(2) });
+    expect(filterBar(el)).not.toBeNull();
+    expect(findBox(el)).not.toBeNull();
+    expect(searchBox(el)).not.toBeNull();
+  });
+
+  it('[EP00-TBR-003-CA3] searchable=true behaves like the default', () => {
+    const { el } = render({ rows: makeRows(2), searchable: true });
+    expect(filterBar(el)).not.toBeNull();
+    expect(findBox(el)).not.toBeNull();
+    expect(searchBox(el)!.getAttribute('placeholder')).toBe('Buscar por nombre');
+  });
+
+  it('[EP00-TBR-003-CA3] searchable=false paints no filter bar, no search box and no text input', () => {
+    const { el } = render({ rows: makeRows(2), searchable: false });
+    expect(filterBar(el)).toBeNull();
+    expect(findBox(el)).toBeNull();
+    expect(el.querySelectorAll('input')).toHaveLength(0);
+  });
+
+  it('[EP00-TBR-003-CA3] searchable=false keeps the header, the rows and the footer', () => {
+    const { el } = render({ rows: makeRows(20), searchable: false });
+    expect(el.querySelector('.tb-sec h2')?.textContent?.trim()).toBe('Productos');
+    expect(el.querySelector('[role="table"]')).not.toBeNull();
+    expect(dataRows(el)).toHaveLength(20);
+    expect(footerText(el)).toContain('20 productos');
+  });
+
+  it('[EP00-TBR-003-CA3] searchable=false hides «Limpiar filtros» of the bar even with filtersActive', () => {
+    const { el } = render({ rows: makeRows(2), searchable: false, filtersActive: true });
+    expect(buttonByText(el, 'Limpiar filtros')).toBeUndefined();
+  });
+
+  it('[EP00-TBR-003-CA3] searchable=false: the first tabbable is a sortable header, not a search box', () => {
+    const { el } = render({ rows: makeRows(2), searchable: false, rowsActivatable: true });
+    expect(tabbables(el)[0]).toBe(headerControl(header(el, 'Precio')));
+  });
+
+  it('[EP00-TBR-003-CA3] searchable=false does not need searchLabel (assumption: searchLabel becomes optional)', () => {
+    const fixture = TestBed.createComponent(TbDataTable);
+    const inputs: Record<string, unknown> = { ...DEFAULTS, rows: makeRows(2), searchable: false };
+    delete inputs['searchLabel'];
+    delete inputs['searchPlaceholder'];
+    expect(() => {
+      for (const [k, v] of Object.entries(inputs)) fixture.componentRef.setInput(k, v);
+      fixture.detectChanges();
+    }).not.toThrow();
+    const el = fixture.nativeElement as HTMLElement;
+    expect(dataRows(el)).toHaveLength(2);
+    expect(findBox(el)).toBeNull();
+  });
+
+  it('[EP00-TBR-003-CA3] searchable can be switched at runtime', () => {
+    const { el, set } = render({ rows: makeRows(2), searchable: false });
+    expect(findBox(el)).toBeNull();
+    set({ searchable: true });
+    expect(searchBox(el)).not.toBeNull();
+  });
+
+  it('[EP00-TBR-003-CA2] searchable=false keeps the error EmptyState with role="alert" and «Reintentar»', () => {
+    const { el, out, sync } = render({ state: 'error', rows: [], searchable: false });
+    const es = emptyState(el);
+    expect(es).not.toBeNull();
+    expect(roleOf(es!)).toBe('alert');
+    buttonByText(es!, 'Reintentar')!.click();
+    sync();
+    expect(out.retry).toBe(1);
+    expect(filterBar(el)).toBeNull();
+  });
+});
+
+@Component({
+  selector: 'tb-data-table-footer-host',
+  imports: [TbDataTable],
+  template: `
+    <tb-data-table
+      title="Productos"
+      [columns]="columns"
+      [rows]="rows"
+      [rowKey]="rowKey"
+      [state]="state"
+      searchLabel="Buscar productos"
+      [itemLabel]="itemLabel"
+      loadingLabel="Cargando productos"
+      [texts]="texts"
+    >
+      <div tbFooter id="caller-footer"><button type="button" id="caller-next">Siguiente</button></div>
+    </tb-data-table>
+  `,
+})
+class FooterHost {
+  columns = COLUMNS;
+  rows: Row[] = makeRows(20);
+  rowKey = (r: Row) => r.id;
+  state: 'loading' | 'ready' | 'error' | 'offline' | 'forbidden' = 'ready';
+  itemLabel = { one: 'producto', other: 'productos' };
+  texts = TEXTS;
+}
+
+function renderFooterHost(patch: Partial<Pick<FooterHost, 'rows' | 'state'>> = {}) {
+  const fixture = TestBed.createComponent(FooterHost);
+  Object.assign(fixture.componentInstance, patch);
+  fixture.detectChanges();
+  return { fixture, el: fixture.nativeElement as HTMLElement };
+}
+
+describe('[EP00-TBR-003-CA3] G2 TbDataTable footer with projected content ([tbFooter])', () => {
+  it('[EP00-TBR-003-CA3] the [tbFooter] content is rendered inside the table footer', () => {
+    const { el } = renderFooterHost();
+    const own = el.querySelector('#caller-footer') as HTMLElement | null;
+    expect(own).not.toBeNull();
+    const foot = own!.closest('footer');
+    expect(foot).not.toBeNull();
+    expect(foot!.closest('tb-data-table')).not.toBeNull();
+  });
+
+  it('[EP00-TBR-003-CA3] the [tbFooter] content is not in the card header nor in the tools slot', () => {
+    const { el } = renderFooterHost();
+    const own = el.querySelector('#caller-footer') as HTMLElement | null;
+    expect(own).not.toBeNull();
+    expect(own!.closest('.tb-sec')).toBeNull();
+    expect(own!.closest('.tools')).toBeNull();
+  });
+
+  it('[EP00-TBR-003-CA3] the projected footer buttons are reachable with Tab after the sortable headers', () => {
+    const { el } = renderFooterHost();
+    const order = tabbables(el);
+    const next = el.querySelector('#caller-next') as HTMLElement | null;
+    expect(next).not.toBeNull();
+    expect(order).toContain(next);
+    expect(order.indexOf(headerControl(header(el, 'Precio')))).toBeLessThan(order.indexOf(next!));
+  });
+
+  for (const state of ['error', 'offline', 'forbidden'] as const) {
+    it(`[EP00-TBR-003-CA2] state ${state} shows no [tbFooter] content (approved UI: error states have no list footer)`, () => {
+      const { el } = renderFooterHost({ state, rows: [] });
+      expect(emptyState(el)).not.toBeNull();
+      expect(el.querySelector('#caller-footer')).toBeNull();
+    });
+  }
+
+  it('[EP00-TBR-003-CA3] ready with zero rows (empty state) shows no [tbFooter] content (approved UI, «vacio»)', () => {
+    const { el } = renderFooterHost({ rows: [] });
+    expect(emptyState(el)).not.toBeNull();
+    expect(el.querySelector('#caller-footer')).toBeNull();
+  });
+
+  it('[EP00-TBR-003-CA3] without projected content the footer is the 004 one: count and note, no buttons', () => {
+    const { el } = render({ rows: makeRows(41), note: 'Precios sin impuestos' });
+    const foot = el.querySelector('footer') as HTMLElement | null;
+    expect(foot).not.toBeNull();
+    const t = (foot!.textContent ?? '').replace(/\s+/g, ' ').trim();
+    expect(t).toContain('41 productos');
+    expect(t).toContain('Precios sin impuestos');
+    expect(foot!.querySelectorAll('button')).toHaveLength(0);
+  });
+});
+
+describe('[EP00-TBR-003-CA3] G2 TbDataTable footer while loading (fake timers)', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('[EP00-TBR-003-CA3] with the skeleton on screen there is no [tbFooter] content (approved UI, «cargando»)', () => {
+    const { el, fixture } = renderFooterHost({ state: 'loading', rows: [] });
+    vi.advanceTimersByTime(300);
+    fixture.detectChanges();
+    expect(skeleton(el)).not.toBeNull();
+    expect(el.querySelector('#caller-footer')).toBeNull();
+  });
+});
+
+// Texts of the VALIDATION error of the approved UI (propuesta.md §3, question 12).
+const VALIDATION_TEXTS = {
+  ...TEXTS,
+  error: {
+    heading: 'No pudimos pedir esa página',
+    message: 'Reintenta; si sigue igual, avisa al equipo técnico.',
+    secondaryActionLabel: 'Ir a la primera página',
+  },
+};
+
+const emptyLabels = (el: HTMLElement) =>
+  Array.from(emptyState(el)?.querySelectorAll('button') ?? []).map((b) => b.textContent?.trim());
+
+describe('[EP00-TBR-003-CA2] G3 TbDataTable secondary action in the error state', () => {
+  it('[EP00-TBR-003-CA2] error with secondaryActionLabel shows «Reintentar» and then «Ir a la primera página» (ghost)', () => {
+    const { el } = render({ state: 'error', rows: [], texts: VALIDATION_TEXTS });
+    const es = emptyState(el)!;
+    expect(roleOf(es)).toBe('alert');
+    expect(es.textContent).toContain('No pudimos pedir esa página');
+    expect(emptyLabels(el)).toEqual(['Reintentar', 'Ir a la primera página']);
+    expect(buttonByText(es, 'Ir a la primera página')!.classList.contains('ghost')).toBe(true);
+    expect(buttonByText(es, 'Reintentar')!.classList.contains('ghost')).toBe(false);
+  });
+
+  it('[EP00-TBR-003-CA2] the secondary action emits secondaryAction("error") and not retry', () => {
+    const { fixture, el, out, sync } = render({ state: 'error', rows: [], texts: VALIDATION_TEXTS });
+    const secondary = outputOf<unknown>(fixture.componentInstance, 'secondaryAction');
+    expect(secondary).toBeDefined();
+    const seen: unknown[] = [];
+    secondary!.subscribe((v) => seen.push(v));
+    const button = buttonByText(emptyState(el)!, 'Ir a la primera página');
+    expect(button).toBeDefined();
+    button!.click();
+    sync();
+    expect(seen).toEqual(['error']);
+    expect(out.retry).toBe(0);
+  });
+
+  it('[EP00-TBR-003-CA2] with a secondary action, «Reintentar» still emits retry only', () => {
+    const { fixture, el, out, sync } = render({ state: 'error', rows: [], texts: VALIDATION_TEXTS });
+    const seen: unknown[] = [];
+    outputOf<unknown>(fixture.componentInstance, 'secondaryAction')?.subscribe((v) => seen.push(v));
+    expect(buttonByText(emptyState(el)!, 'Ir a la primera página')).toBeDefined();
+    buttonByText(emptyState(el)!, 'Reintentar')!.click();
+    sync();
+    expect(out.retry).toBe(1);
+    expect(seen).toEqual([]);
+  });
+
+  it('[EP00-TBR-003-CA2] without secondaryActionLabel the error state has only «Reintentar», as in 004', () => {
+    const { el } = render({ state: 'error', rows: [] });
+    expect(emptyLabels(el)).toEqual(['Reintentar']);
+  });
+
+  it('[EP00-TBR-003-CA2] INVALID_CURSOR: the error action label is replaced by «Ir a la primera página», a single action', () => {
+    const texts = {
+      ...TEXTS,
+      error: {
+        heading: 'Esa página ya no está disponible',
+        message: 'Vuelve a la primera página.',
+        actionLabel: 'Ir a la primera página',
+      },
+    };
+    const { el, out, sync } = render({ state: 'error', rows: [], texts });
+    expect(emptyLabels(el)).toEqual(['Ir a la primera página']);
+    buttonByText(emptyState(el)!, 'Ir a la primera página')!.click();
+    sync();
+    expect(out.retry).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// [EP00-TBR-003-CA2][EP00-TBR-003-CA3] T4 contract, round 2 (decisions of the dev and the orchestrator, 2026-11-11):
+//   1. TbTableText gains an optional actionVariant ('default' | 'primary'); the table forwards it to its EmptyState.
+//      Without it everything stays as in 004. In the approved UI «Reintentar» (error) and «Ir a la primera página»
+//      (invalid cursor) are primary; the secondary is always ghost.
+//   2. Single count in the footer: with content projected in [tbFooter] the table does not paint its own count; the
+//      footer shows only what the projected content brings. Without projection the footer is the 004 one.
+//   3. A secondary action without a primary action is not painted.
+// Texts are passed untyped through setInput so this file keeps compiling before T4 adds actionVariant to TbTableText.
+// ---------------------------------------------------------------------------------------------------------------------
+const lookOf = (b: HTMLElement | undefined) => ({
+  btn: !!b?.classList.contains('tb-btn'),
+  primary: !!b?.classList.contains('primary'),
+  ghost: !!b?.classList.contains('ghost'),
+});
+const DEFAULT_LOOK = { btn: true, primary: false, ghost: false };
+const PRIMARY_LOOK = { btn: true, primary: true, ghost: false };
+const GHOST_LOOK = { btn: true, primary: false, ghost: true };
+
+describe('[EP00-TBR-003-CA2] TbDataTable forwards actionVariant to its EmptyState', () => {
+  it('[EP00-TBR-003-CA2] without actionVariant «Reintentar» is the 004 tb-btn (not primary, not ghost)', () => {
+    const { el } = render({ state: 'error', rows: [] });
+    expect(lookOf(buttonByText(emptyState(el)!, 'Reintentar'))).toEqual(DEFAULT_LOOK);
+  });
+
+  it('[EP00-TBR-003-CA2] error with actionVariant "primary": «Reintentar» is tb-btn primary (approved UI)', () => {
+    const texts = { ...TEXTS, error: { ...TEXTS.error, actionVariant: 'primary' } };
+    const { el, out, sync } = render({ state: 'error', rows: [], texts });
+    const retry = buttonByText(emptyState(el)!, 'Reintentar');
+    expect(lookOf(retry)).toEqual(PRIMARY_LOOK);
+    retry!.click();
+    sync();
+    expect(out.retry).toBe(1);
+  });
+
+  it('[EP00-TBR-003-CA2] VALIDATION error with actionVariant "primary": «Reintentar» primary, «Ir a la primera página» ghost', () => {
+    const texts = { ...VALIDATION_TEXTS, error: { ...VALIDATION_TEXTS.error, actionVariant: 'primary' } };
+    const { el } = render({ state: 'error', rows: [], texts });
+    expect(emptyLabels(el)).toEqual(['Reintentar', 'Ir a la primera página']);
+    expect(lookOf(buttonByText(emptyState(el)!, 'Reintentar'))).toEqual(PRIMARY_LOOK);
+    expect(lookOf(buttonByText(emptyState(el)!, 'Ir a la primera página'))).toEqual(GHOST_LOOK);
+  });
+
+  it('[EP00-TBR-003-CA2] INVALID_CURSOR with actionVariant "primary": «Ir a la primera página» is tb-btn primary', () => {
+    const texts = {
+      ...TEXTS,
+      error: {
+        heading: 'Esa página ya no está disponible',
+        message: 'Vuelve a la primera página.',
+        actionLabel: 'Ir a la primera página',
+        actionVariant: 'primary',
+      },
+    };
+    const { el } = render({ state: 'error', rows: [], texts });
+    expect(emptyLabels(el)).toEqual(['Ir a la primera página']);
+    expect(lookOf(buttonByText(emptyState(el)!, 'Ir a la primera página'))).toEqual(PRIMARY_LOOK);
+  });
+
+  it('[EP00-TBR-003-CA2] actionVariant "default" looks exactly like no actionVariant', () => {
+    const texts = { ...TEXTS, error: { ...TEXTS.error, actionVariant: 'default' } };
+    const plain = buttonByText(emptyState(render({ state: 'error', rows: [] }).el)!, 'Reintentar')!;
+    const explicit = buttonByText(emptyState(render({ state: 'error', rows: [], texts }).el)!, 'Reintentar')!;
+    expect(lookOf(explicit)).toEqual(DEFAULT_LOOK);
+    expect(explicit.className).toBe(plain.className);
+  });
+
+  it('[EP00-TBR-003-CA2] actionVariant is per variant: primary on error does not change offline', () => {
+    const texts = { ...TEXTS, error: { ...TEXTS.error, actionVariant: 'primary' } };
+    const { el, set } = render({ state: 'error', rows: [], texts });
+    expect(lookOf(buttonByText(emptyState(el)!, 'Reintentar'))).toEqual(PRIMARY_LOOK);
+    set({ state: 'offline' });
+    expect(lookOf(buttonByText(emptyState(el)!, 'Reintentar'))).toEqual(DEFAULT_LOOK);
+  });
+
+  it('[EP00-TBR-003-CA2] actionVariant "primary" on the empty variant applies to its own action label', () => {
+    const texts = { ...TEXTS, empty: { ...TEXTS.empty, actionVariant: 'primary' } };
+    const { el } = render({ state: 'ready', rows: [], texts });
+    expect(lookOf(buttonByText(emptyState(el)!, 'Crear producto'))).toEqual(PRIMARY_LOOK);
+  });
+});
+
+describe('[EP00-TBR-003-CA2] TbDataTable secondary action without primary action', () => {
+  it('[EP00-TBR-003-CA2] forbidden with only secondaryActionLabel paints no button in the EmptyState', () => {
+    const texts = { ...TEXTS, forbidden: { ...TEXTS.forbidden, secondaryActionLabel: 'Ir a la primera página' } };
+    const { el } = render({ state: 'forbidden', rows: [], texts });
+    expect(emptyState(el)).not.toBeNull();
+    expect(emptyLabels(el)).toEqual([]);
+  });
+
+  it('[EP00-TBR-003-CA2] offline (default action «Reintentar») with secondaryActionLabel paints both, the secondary ghost', () => {
+    const texts = { ...TEXTS, offline: { ...TEXTS.offline, secondaryActionLabel: 'Ir a la primera página' } };
+    const { el } = render({ state: 'offline', rows: [], texts });
+    expect(emptyLabels(el)).toEqual(['Reintentar', 'Ir a la primera página']);
+    expect(lookOf(buttonByText(emptyState(el)!, 'Ir a la primera página'))).toEqual(GHOST_LOOK);
+  });
+});
+
+const flat = (node: Element | null) => (node?.textContent ?? '').replace(/\s+/g, ' ').trim();
+
+@Component({
+  selector: 'tb-data-table-count-footer-host',
+  imports: [TbDataTable],
+  template: `
+    <tb-data-table
+      title="Productos"
+      [columns]="columns"
+      [rows]="rows"
+      [rowKey]="rowKey"
+      state="ready"
+      searchLabel="Buscar productos"
+      [itemLabel]="itemLabel"
+      loadingLabel="Cargando productos"
+      [texts]="texts"
+    >
+      <div tbFooter id="caller-count"><span>Página 1 · 20 productos</span></div>
+    </tb-data-table>
+  `,
+})
+class CountFooterHost {
+  columns = COLUMNS;
+  rows: Row[] = makeRows(20);
+  rowKey = (r: Row) => r.id;
+  itemLabel = { one: 'producto', other: 'productos' };
+  texts = TEXTS;
+}
+
+describe('[EP00-TBR-003-CA3] G2 TbDataTable single count in the footer (hallazgo 1)', () => {
+  it('[EP00-TBR-003-CA3] with [tbFooter] content the table does not paint its own count', () => {
+    const { el } = renderFooterHost();
+    const foot = el.querySelector('footer');
+    expect(foot).not.toBeNull();
+    expect(foot!.querySelector('#caller-footer')).not.toBeNull();
+    expect(flat(foot)).not.toContain('20 productos');
+    expect(flat(foot)).toBe('Siguiente');
+  });
+
+  it('[EP00-TBR-003-CA3] with [tbFooter] content the footer shows the projected count once («Página 1 · 20 productos»)', () => {
+    const fixture = TestBed.createComponent(CountFooterHost);
+    fixture.detectChanges();
+    const foot = (fixture.nativeElement as HTMLElement).querySelector('footer');
+    expect(foot).not.toBeNull();
+    expect(foot!.querySelector('#caller-count')).not.toBeNull();
+    expect(flat(foot)).toBe('Página 1 · 20 productos');
+    expect(flat(foot).match(/20 productos/g)).toHaveLength(1);
+  });
+
+  it('[EP00-TBR-003-CA3] without [tbFooter] content the footer keeps the 004 count', () => {
+    const { el } = render({ rows: makeRows(20) });
+    expect(flat(el.querySelector('footer'))).toBe('20 productos');
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// [EP00-TBR-003-CA2][EP00-TBR-003-CA3] T4 contract, round 3 (option a approved by the dev, 2026-11-11; kit v6
+// referencia.html «Tablas», approved UI docs/ui/EP00-TBR-003/index.html):
+//   G5. TbTableText.actionLabel: null is forwarded to the EmptyState: no action, not even in error or offline.
+//   G6. TbTableText.message is a text or a list of texts (one <p> each) and TbTableText.reference?: string paints the
+//       last <p> «Referencia: <id>» with the id in .tb-num.
+//   G7. stickyColumns: 0 | 1 | 2 (0 by default). 1 puts the kit class stick1 on .tb-hscroll; 2 puts stick1 and stick2.
+//       With 2, the inline custom property --stick2 of .tb-hscroll is the first column track plus the column gap,
+//       as the kit computes it (tpl[0] + columnGap); the gap of .tb-row is var(--spacing-3) = 12px, so a 104px track
+//       gives 116px (the prototype value) and a 56px track gives 68px (the kit sample). If the first track is not in
+//       px there is no inline --stick2 and the kit fallback var(--stick2, 68px) applies.
+//   G8. density: 'default' | 'dense' ('default' by default, rows of var(--size-row) = 56px). 'dense' puts the kit class
+//       dense on .tb-list (rows of 44px, padding 6px).
+//   Without any of the new inputs the DOM is the 004 one (and rounds 1 and 2).
+// New inputs and text fields are reached through setInput, untyped, so this file keeps compiling before T4.
+// ---------------------------------------------------------------------------------------------------------------------
+const SPACING_3_PX = 12;
+const hscroll = (el: HTMLElement) => el.querySelector('.tb-hscroll') as HTMLElement | null;
+const list = (el: HTMLElement) => el.querySelector('.tb-list') as HTMLElement | null;
+const headRow = (el: HTMLElement) => el.querySelector('.tb-head-row') as HTMLElement;
+const firstRow = (el: HTMLElement) => dataRows(el)[0];
+const withFirstTrack = (track: string | undefined): TbColumn<Row>[] =>
+  COLUMNS.map((c, i) => (i === 0 ? { ...c, track } : { ...c, track: c.track ?? '120px' }));
+
+// --stick2 as px: accepts a px length or calc(<px> + var(--spacing-3)), the two forms of «track plus column gap».
+function stick2Px(host: HTMLElement | null): number | null {
+  const raw = normalize(host?.style.getPropertyValue('--stick2') ?? '');
+  if (!raw) return null;
+  const px = raw.match(/^(\d+(?:\.\d+)?)px$/);
+  if (px) return Number(px[1]);
+  const sum = raw.match(/^calc\((\d+(?:\.\d+)?)px \+ var\(--spacing-3\)\)$/);
+  if (sum) return Number(sum[1]) + SPACING_3_PX;
+  return Number.NaN;
+}
+
+describe('[EP00-TBR-003-CA3] G7 TbDataTable fixed columns (stickyColumns)', () => {
+  it('[EP00-TBR-003-CA3] without stickyColumns .tb-hscroll has no stick class nor --stick2, as in 004', () => {
+    const { el } = render({ rows: makeRows(3), columns: withFirstTrack('104px') });
+    expect(Array.from(hscroll(el)!.classList)).toEqual(['tb-hscroll']);
+    expect(hscroll(el)!.style.getPropertyValue('--stick2')).toBe('');
+  });
+
+  it('[EP00-TBR-003-CA3] stickyColumns 0 is the same as no stickyColumns', () => {
+    const { el } = render({ rows: makeRows(3), columns: withFirstTrack('104px'), stickyColumns: 0 });
+    expect(Array.from(hscroll(el)!.classList)).toEqual(['tb-hscroll']);
+    expect(hscroll(el)!.style.getPropertyValue('--stick2')).toBe('');
+  });
+
+  it('[EP00-TBR-003-CA3] stickyColumns 1 puts stick1 on .tb-hscroll and not stick2', () => {
+    const { el } = render({ rows: makeRows(3), columns: withFirstTrack('104px'), stickyColumns: 1 });
+    expect(hscroll(el)!.classList.contains('stick1')).toBe(true);
+    expect(hscroll(el)!.classList.contains('stick2')).toBe(false);
+  });
+
+  it('[EP00-TBR-003-CA3] stickyColumns 2 puts stick1 and stick2 on .tb-hscroll (approved UI)', () => {
+    const { el } = render({ rows: makeRows(3), columns: withFirstTrack('104px'), stickyColumns: 2 });
+    expect(hscroll(el)!.classList.contains('stick1')).toBe(true);
+    expect(hscroll(el)!.classList.contains('stick2')).toBe(true);
+  });
+
+  it('[EP00-TBR-003-CA3] stickyColumns 2 with a 104px first track sets --stick2 to 116px (prototype value)', () => {
+    const { el } = render({ rows: makeRows(3), columns: withFirstTrack('104px'), stickyColumns: 2 });
+    expect(stick2Px(hscroll(el))).toBe(116);
+  });
+
+  it('[EP00-TBR-003-CA3] stickyColumns 2 with a 56px first track sets --stick2 to 68px (kit sample)', () => {
+    const { el } = render({ rows: makeRows(3), columns: withFirstTrack('56px'), stickyColumns: 2 });
+    expect(stick2Px(hscroll(el))).toBe(68);
+  });
+
+  it('[EP00-TBR-003-CA3] stickyColumns 2 with a first track not in px sets no --stick2 (kit fallback 68px)', () => {
+    for (const track of [undefined, 'minmax(190px,1.3fr)']) {
+      const { el } = render({ rows: makeRows(3), columns: withFirstTrack(track), stickyColumns: 2 });
+      expect(hscroll(el)!.classList.contains('stick2')).toBe(true);
+      expect(hscroll(el)!.style.getPropertyValue('--stick2')).toBe('');
+    }
+  });
+
+  it('[EP00-TBR-003-CA3] stick1 makes the first header and row cells sticky at left 0 on the surface', () => {
+    const { el } = render({ rows: makeRows(3), columns: withFirstTrack('104px'), stickyColumns: 1 });
+    const rules = componentRules(TbIcon, TbDataTable);
+    for (const cell of [headRow(el).children[0], firstRow(el).children[0]]) {
+      expect(declared(cell, 'position', rules)).toBe('sticky');
+      expect(declared(cell, 'left', rules)).toBe('0');
+      expect(declared(cell, 'z-index', rules)).toBe('2');
+      expect(declared(cell, 'background', rules)).toBe('var(--color-surface)');
+      expect(declared(cell, 'box-shadow', rules)).toBe('1px 0 0 var(--color-line)');
+    }
+    expect(declared(firstRow(el).children[1], 'position', rules)).not.toBe('sticky');
+  });
+
+  it('[EP00-TBR-003-CA3] stick2 makes the second cells sticky at var(--stick2, 68px) with the divider on the second', () => {
+    const { el } = render({ rows: makeRows(3), columns: withFirstTrack('104px'), stickyColumns: 2 });
+    const rules = componentRules(TbIcon, TbDataTable);
+    for (const row of [headRow(el), firstRow(el)]) {
+      const [first, second] = [row.children[0], row.children[1]];
+      expect(declared(first, 'position', rules)).toBe('sticky');
+      expect(declared(first, 'left', rules)).toBe('0');
+      expect(declared(first, 'box-shadow', rules)).toBeNull();
+      expect(declared(second, 'position', rules)).toBe('sticky');
+      expect(declared(second, 'left', rules)).toBe('var(--stick2, 68px)');
+      expect(declared(second, 'z-index', rules)).toBe('2');
+      expect(declared(second, 'background', rules)).toBe('var(--color-surface)');
+      expect(declared(second, 'box-shadow', rules)).toBe('1px 0 0 var(--color-line)');
+    }
+    expect(declared(firstRow(el).children[2], 'position', rules)).not.toBe('sticky');
+  });
+
+  it('[EP00-TBR-003-CA3] without stickyColumns no cell is sticky, as in 004', () => {
+    const { el } = render({ rows: makeRows(3), columns: withFirstTrack('104px') });
+    const rules = componentRules(TbIcon, TbDataTable);
+    for (const cell of [headRow(el).children[0], firstRow(el).children[0], firstRow(el).children[1]]) {
+      expect(declared(cell, 'position', rules)).not.toBe('sticky');
+    }
+  });
+
+  it('[EP00-TBR-003-CA3] stickyColumns can be switched at runtime: 2, 0', () => {
+    const { el, set } = render({ rows: makeRows(3), columns: withFirstTrack('104px'), stickyColumns: 2 });
+    expect(stick2Px(hscroll(el))).toBe(116);
+    set({ stickyColumns: 0 });
+    expect(Array.from(hscroll(el)!.classList)).toEqual(['tb-hscroll']);
+    expect(hscroll(el)!.style.getPropertyValue('--stick2')).toBe('');
+  });
+
+  it('[EP00-TBR-003-CA3] stickyColumns does not change roles, row count nor cell texts', () => {
+    const plain = render({ rows: makeRows(3), columns: withFirstTrack('104px') }).el;
+    const fixed = render({ rows: makeRows(3), columns: withFirstTrack('104px'), stickyColumns: 2 }).el;
+    expect(hscroll(fixed)!.classList.contains('stick2')).toBe(true);
+    expect(dataRows(fixed)).toHaveLength(3);
+    expect(headers(fixed).map((h) => h.textContent?.trim())).toEqual(headers(plain).map((h) => h.textContent?.trim()));
+    expect(dataRows(fixed).map((r) => flat(r))).toEqual(dataRows(plain).map((r) => flat(r)));
+  });
+});
+
+describe('[EP00-TBR-003-CA3] G8 TbDataTable compact rows (density)', () => {
+  it('[EP00-TBR-003-CA3] without density .tb-list has no dense class and rows of var(--size-row), as in 004', () => {
+    const { el } = render({ rows: makeRows(3) });
+    const rules = componentRules(TbIcon, TbDataTable);
+    expect(list(el)!.classList.contains('dense')).toBe(false);
+    expect(declared(firstRow(el), 'min-height', rules)).toBe('var(--size-row)');
+    expect(declared(firstRow(el), 'padding-top', rules)).toBe('10px');
+  });
+
+  it('[EP00-TBR-003-CA3] density "default" is the same as no density', () => {
+    const { el } = render({ rows: makeRows(3), density: 'default' });
+    const rules = componentRules(TbIcon, TbDataTable);
+    expect(list(el)!.classList.contains('dense')).toBe(false);
+    expect(declared(firstRow(el), 'min-height', rules)).toBe('var(--size-row)');
+  });
+
+  it('[EP00-TBR-003-CA3] density "dense" puts the kit class dense on .tb-list (approved UI)', () => {
+    const { el } = render({ rows: makeRows(3), density: 'dense' });
+    expect(list(el)!.classList.contains('dense')).toBe(true);
+    expect(list(el)!.getAttribute('role')).toBe('table');
+  });
+
+  it('[EP00-TBR-003-CA3] dense rows declare the kit 44px min-height and 6px vertical padding', () => {
+    const { el } = render({ rows: makeRows(3), density: 'dense' });
+    const rules = componentRules(TbIcon, TbDataTable);
+    for (const row of dataRows(el)) {
+      expect(declared(row, 'min-height', rules)).toBe('44px');
+      expect(declared(row, 'padding-top', rules)).toBe('6px');
+      expect(declared(row, 'padding-bottom', rules)).toBe('6px');
+    }
+  });
+
+  it('[EP00-TBR-003-CA3] density can be switched at runtime: dense, default', () => {
+    const { el, set } = render({ rows: makeRows(3), density: 'dense' });
+    expect(list(el)!.classList.contains('dense')).toBe(true);
+    set({ density: 'default' });
+    expect(list(el)!.classList.contains('dense')).toBe(false);
+  });
+
+  it('[EP00-TBR-003-CA3] dense and stickyColumns 2 together, as in the approved UI', () => {
+    const { el } = render({ rows: makeRows(3), columns: withFirstTrack('104px'), stickyColumns: 2, density: 'dense' });
+    expect(hscroll(el)!.classList.contains('stick1')).toBe(true);
+    expect(hscroll(el)!.classList.contains('stick2')).toBe(true);
+    expect(stick2Px(hscroll(el))).toBe(116);
+    expect(list(el)!.classList.contains('dense')).toBe(true);
+    expect(dataRows(el)).toHaveLength(3);
+  });
+});
+
+describe('[EP00-TBR-003-CA3] round 3 compatibility: without the new inputs the DOM is the 004 one', () => {
+  it('[EP00-TBR-003-CA3] stickyColumns 0 and density "default" give the same DOM as no new input', () => {
+    const plain = render({ rows: makeRows(3), columns: withFirstTrack('104px') }).el;
+    const explicit = render({ rows: makeRows(3), columns: withFirstTrack('104px'), stickyColumns: 0, density: 'default' }).el;
+    expect(explicit.innerHTML).toBe(plain.innerHTML);
+  });
+
+  it('[EP00-TBR-003-CA3] .tb-hscroll and .tb-list keep exactly their 004 classes', () => {
+    const { el } = render({ rows: makeRows(3) });
+    expect(Array.from(hscroll(el)!.classList)).toEqual(['tb-hscroll']);
+    expect(Array.from(list(el)!.classList)).toEqual(['tb-list']);
+  });
+});
+
+const NOT_FOUND_TEXTS = {
+  ...TEXTS,
+  error: {
+    heading: 'No encontramos el catálogo',
+    message: ['No existe el recurso pedido.', 'Vuelve a abrirlo desde el menú.'],
+    reference: 'c-demo-0003',
+    actionLabel: null,
+  },
+};
+const emptyParagraphs = (el: HTMLElement) =>
+  Array.from(emptyState(el)?.querySelectorAll('p') ?? []).map((p) => flat(p));
+
+describe('[EP00-TBR-003-CA2] G5 TbDataTable forwards actionLabel null to its EmptyState', () => {
+  it('[EP00-TBR-003-CA2] error with actionLabel null shows the EmptyState with role="alert" and no button', () => {
+    const texts = { ...TEXTS, error: { ...TEXTS.error, actionLabel: null } };
+    const { el } = render({ state: 'error', rows: [], texts });
+    const es = emptyState(el)!;
+    expect(es).not.toBeNull();
+    expect(roleOf(es)).toBe('alert');
+    expect(es.textContent).toContain(TEXTS.error.heading);
+    expect(emptyLabels(el)).toEqual([]);
+    expect(es.querySelector('.acts')).toBeNull();
+  });
+
+  it('[EP00-TBR-003-CA2] offline with actionLabel null shows no button', () => {
+    const texts = { ...TEXTS, offline: { ...TEXTS.offline, actionLabel: null } };
+    const { el } = render({ state: 'offline', rows: [], texts });
+    expect(emptyState(el)).not.toBeNull();
+    expect(emptyLabels(el)).toEqual([]);
+  });
+
+  it('[EP00-TBR-003-CA2] actionLabel null with secondaryActionLabel shows no button either', () => {
+    const texts = { ...TEXTS, error: { ...VALIDATION_TEXTS.error, actionLabel: null } };
+    const { el } = render({ state: 'error', rows: [], texts });
+    expect(emptyState(el)).not.toBeNull();
+    expect(emptyLabels(el)).toEqual([]);
+  });
+
+  it('[EP00-TBR-003-CA2] without actionLabel the error keeps «Reintentar», as in 004', () => {
+    const { el } = render({ state: 'error', rows: [] });
+    expect(emptyLabels(el)).toEqual(['Reintentar']);
+  });
+});
+
+describe('[EP00-TBR-003-CA2] G6 TbDataTable forwards several paragraphs and the reference', () => {
+  it('[EP00-TBR-003-CA2] NOT_FOUND of the approved UI: two paragraphs, «Referencia: c-demo-0003» and no action', () => {
+    const { el } = render({ state: 'error', rows: [], texts: NOT_FOUND_TEXTS });
+    expect(roleOf(emptyState(el)!)).toBe('alert');
+    expect(emptyParagraphs(el)).toEqual([
+      'No existe el recurso pedido.',
+      'Vuelve a abrirlo desde el menú.',
+      'Referencia: c-demo-0003',
+    ]);
+    expect(emptyState(el)!.querySelector('p:last-of-type .tb-num')?.textContent?.trim()).toBe('c-demo-0003');
+    expect(emptyLabels(el)).toEqual([]);
+  });
+
+  it('[EP00-TBR-003-CA2] UNAVAILABLE of the approved UI: two paragraphs, reference and «Reintentar» primary', () => {
+    const texts = {
+      ...TEXTS,
+      error: {
+        heading: 'No pudimos cargar el catálogo',
+        message: ['El servicio no está disponible por ahora.', 'Reintenta; si sigue igual, avisa al equipo técnico.'],
+        reference: 'c-demo-0001',
+        actionVariant: 'primary',
+      },
+    };
+    const { el, out, sync } = render({ state: 'error', rows: [], texts });
+    expect(emptyParagraphs(el)).toEqual([
+      'El servicio no está disponible por ahora.',
+      'Reintenta; si sigue igual, avisa al equipo técnico.',
+      'Referencia: c-demo-0001',
+    ]);
+    expect(lookOf(buttonByText(emptyState(el)!, 'Reintentar'))).toEqual(PRIMARY_LOOK);
+    buttonByText(emptyState(el)!, 'Reintentar')!.click();
+    sync();
+    expect(out.retry).toBe(1);
+  });
+
+  it('[EP00-TBR-003-CA2] forbidden with a reference keeps role="status" (approved UI, sin-permisos)', () => {
+    const texts = {
+      ...TEXTS,
+      forbidden: {
+        heading: 'Tu perfil no puede ver el catálogo',
+        message: ['No tienes permiso para esta consulta.', 'Pide acceso a quien administra tu perfil.'],
+        reference: 'c-demo-0004',
+      },
+    };
+    const { el } = render({ state: 'forbidden', rows: [], texts });
+    expect(roleOf(emptyState(el)!)).toBe('status');
+    expect(emptyParagraphs(el)).toEqual([
+      'No tienes permiso para esta consulta.',
+      'Pide acceso a quien administra tu perfil.',
+      'Referencia: c-demo-0004',
+    ]);
+  });
+
+  it('[EP00-TBR-003-CA2] a text message without reference stays a single paragraph, as in 004', () => {
+    const { el } = render({ state: 'error', rows: [] });
+    expect(emptyParagraphs(el)).toEqual([TEXTS.error.message]);
+    expect(emptyState(el)!.querySelector('.tb-num')).toBeNull();
+  });
+});
+
+// [EP00-TBR-003-CA1] Mono columns (approved by Elkin, option a): TbColumn gains mono?: boolean. With true, the cells of
+// that column (not its header) carry the kit class tb-num (font-family var(--font-mono), tabular-nums); the value is
+// shown as it comes, as text and without number format. Without mono the DOM is the 004 one. The .tb-num rule must be
+// declared by tb-data-table itself, not borrowed from another component. Synthetic codes only.
+// The columns are cast so this file still compiles before mono exists in TbColumn: the tests then fail on the DOM.
+interface CodeRow {
+  id: string;
+  code: string | null;
+  name: string;
+}
+
+const CODE_ROWS: CodeRow[] = [
+  { id: 'c-1', code: '0001234567890', name: 'Producto sintético 1' },
+  { id: 'c-2', code: 'SYN-000042', name: 'Producto sintético 2' },
+];
+
+const codeColumns = (mono?: boolean): TbColumn<CodeRow>[] => [
+  {
+    id: 'code',
+    header: 'Código',
+    type: 'text',
+    value: (r: CodeRow) => r.code,
+    ...(mono === undefined ? {} : { mono }),
+  } as TbColumn<CodeRow>,
+  { id: 'name', header: 'Nombre', type: 'text', value: (r: CodeRow) => r.name },
+];
+
+const renderCodes = (mono?: boolean, rows: CodeRow[] = CODE_ROWS) =>
+  render({ rows, columns: codeColumns(mono), rowKey: (r: CodeRow) => r.id });
+
+// The tb-num element of a cell: the cell itself or an element inside it.
+const monoOf = (cell: HTMLElement) =>
+  cell.classList.contains('tb-num') ? cell : (cell.querySelector<HTMLElement>('.tb-num') ?? null);
+
+describe('[EP00-TBR-003-CA1] TbDataTable mono columns (tb-num)', () => {
+  it('[EP00-TBR-003-CA1] mono: true puts tb-num on every cell of that column', () => {
+    const { el } = renderCodes(true);
+    const rows = dataRows(el);
+    expect(rows).toHaveLength(2);
+    for (const row of rows) expect(monoOf(cellsOf(row)[0])).not.toBeNull();
+  });
+
+  it('[EP00-TBR-003-CA1] mono: true does not put tb-num on the header nor on the other columns', () => {
+    const { el } = renderCodes(true);
+    const head = header(el, 'Código');
+    expect(head.classList.contains('tb-num') || !!head.querySelector('.tb-num')).toBe(false);
+    for (const row of dataRows(el)) expect(monoOf(cellsOf(row)[1])).toBeNull();
+  });
+
+  it('[EP00-TBR-003-CA1] a mono cell shows the value as it comes, as text and without number format', () => {
+    const { el } = renderCodes(true);
+    const cells = dataRows(el).map((r) => cellsOf(r)[0]);
+    expect(monoOf(cells[0])?.textContent?.trim()).toBe('0001234567890');
+    expect(cells[0].textContent?.trim()).toBe('0001234567890');
+    expect(cells[1].textContent?.trim()).toBe('SYN-000042');
+    expect(isNum(cells[0])).toBe(false);
+  });
+
+  it('[EP00-TBR-003-CA1] an empty value in a mono column shows «—» without throwing, and the other rows keep tb-num', () => {
+    const rows = [{ ...CODE_ROWS[0], code: null }, CODE_ROWS[1]];
+    let el!: HTMLElement;
+    expect(() => (el = renderCodes(true, rows).el)).not.toThrow();
+    expect(cellsOf(dataRows(el)[0])[0].textContent?.trim()).toBe(DASH);
+    expect(monoOf(cellsOf(dataRows(el)[1])[0])).not.toBeNull();
+  });
+
+  it('[EP00-TBR-003-CA1] tb-data-table declares its own .tb-num rule with the mono font and tabular figures', () => {
+    const { el } = renderCodes(true);
+    const rules = componentRules(TbDataTable);
+    expect(rules.some((r) => r.selectors.some((s) => /\.tb-num\b/.test(s)))).toBe(true);
+    const mono = monoOf(cellsOf(dataRows(el)[0])[0]);
+    expect(mono).not.toBeNull();
+    expect(declared(mono!, 'font-family', rules)).toBe('var(--font-mono)');
+    expect(declared(mono!, 'font-variant-numeric', rules)).toBe('tabular-nums');
+  });
+
+  it('[EP00-TBR-003-CA1] without mono there is no tb-num in the table (004 compatibility)', () => {
+    expect(renderCodes().el.querySelector('.tb-num')).toBeNull();
+    expect(render({ rows: makeRows(3) }).el.querySelector('.tb-num')).toBeNull();
+  });
+
+  it('[EP00-TBR-003-CA1] mono: false paints the same DOM as no mono (004 compatibility)', () => {
+    expect(renderCodes(false).el.innerHTML).toBe(renderCodes().el.innerHTML);
+  });
+
+  it('[EP00-TBR-003-CA1] mono: true only adds tb-num: the text of every cell is the same as without mono', () => {
+    const texts = (host: HTMLElement) =>
+      dataRows(host).map((r) => cellsOf(r).map((c) => c.textContent?.trim()));
+    expect(texts(renderCodes(true).el)).toEqual(texts(renderCodes().el));
+  });
+});

@@ -83,8 +83,9 @@ Con «reducir movimiento» el brillo se detiene. Los tiempos (no aparece antes d
 | Entrada | Valores |
 |---|---|
 | `variant` | `empty`, `no-results`, `forbidden`, `offline`, `error` |
-| `heading`, `message` | título y una frase |
-| `actionLabel` | texto de la acción. Por defecto: `no-results` → «Limpiar filtros»; `offline` y `error` → «Reintentar»; los demás, ninguna |
+| `heading`, `message` | título y el mensaje: un texto o una lista de textos, un párrafo por elemento |
+| `reference` | identificador que se pinta al final como «Referencia: id», con el id en `tb-num`. Vacío, no se pinta |
+| `actionLabel` | texto de la acción. `null`: sin acción ni secundaria. Sin valor o vacío: la acción por defecto (D-054). Por defecto: `no-results` → «Limpiar filtros»; `offline` y `error` → «Reintentar»; los demás, ninguna |
 | `focusActionOnShow` | el botón toma el foco al aparecer; solo si la persona acaba de disparar la carga |
 
 Salida: `action()`. Como máximo una acción. Rol: `alert` en `error` y `offline`; `status` en `empty`, `no-results` y `forbidden`.
@@ -145,7 +146,7 @@ Salida: `selectedChange`. Con una selección inválida toma la primera y lo emit
 | Entrada | Valores |
 |---|---|
 | `title` | título de la tarjeta y nombre accesible de la tabla |
-| `columns` | `{ id, header, type, value: (row) => …, cents?, sortable?, track? }`. `type`: `text`, `money`, `quantity`, `percent`, `date`, `status`. Dinero, cantidad y porcentaje van a la derecha. `track` es la pista de la rejilla (por defecto `minmax(0,1fr)`) |
+| `columns` | `{ id, header, type, value: (row) => …, cents?, sortable?, track?, mono? }`. `type`: `text`, `money`, `quantity`, `percent`, `date`, `status`. Dinero, cantidad y porcentaje van a la derecha. `track` es la pista de la rejilla (por defecto `minmax(0,1fr)`). `mono: true` pone la clase `tb-num` (mono y cifras tabulares) en las celdas de la columna, no en el encabezado; el valor se muestra como texto y el vacío sigue en «—» (D-055) |
 | `rows`, `rowKey` | filas y su clave única |
 | `state` | `loading`, `ready`, `error`, `offline`, `forbidden` |
 | `sort` | `{ columnId, direction }` o `null` |
@@ -154,8 +155,10 @@ Salida: `selectedChange`. Con una selección inválida toma la primera y lo emit
 | `itemLabel` | `{ one, other }` para el pie y el anuncio: «1 producto», «41 productos» |
 | `count`, `note` | total del pie (por defecto, `rows.length`) y nota a la derecha |
 | `loadingLabel` | nombre accesible mientras carga |
-| `texts` | un objeto por variante: `{ heading, message, actionLabel? }` para `empty`, `no-results`, `forbidden`, `offline` y `error` |
+| `texts` | un objeto por variante: `{ heading, message, reference?, actionLabel?, actionVariant?, secondaryActionLabel? }`; `message` acepta una lista de textos y `actionLabel: null` quita la acción (D-054). Variantes: `empty`, `no-results`, `forbidden`, `offline` y `error` |
 | `rowsActivatable` | las filas se activan con clic, `Enter` o `Espacio` |
+| `stickyColumns` | `0` (por defecto), `1` o `2`: fija las primeras columnas a la izquierda al desplazar (clases `stick1` y `stick2` del kit). Con `2`, si la primera `track` está en px, `--stick2` es ese ancho más el espacio entre columnas; si no, se usa 68px (D-054) |
+| `density` | `default` (filas de 56 px) o `dense` (44 px, clase `dense` del kit) (D-054) |
 
 Salidas: `sortChange`, `searchChange` (en cada tecla, sin *debounce*), `clearFilters`, `retry`, `loadTimeout`, `rowActivate` y `emptyAction`. Los `FilterSelect` se proyectan dentro de la tabla y las acciones de la cabecera llevan el atributo `tbActions`.
 
@@ -217,8 +220,36 @@ protected readonly texts: TbTableTexts = {
 <!-- El pie de paginación de la página va aquí, fuera de la tabla. -->
 ```
 
+### Ampliación para el catálogo (D-052)
+
+- `searchable` (por defecto `true`): con `false` no hay barra de filtros ni buscador, y `searchLabel` no hace falta.
+- Pie propio: el contenido con el atributo `tbFooter` va dentro del pie y reemplaza el conteo y la nota de la tabla (el conteo sale una sola vez). El pie solo aparece con filas en pantalla.
+- `texts[variante]` acepta `actionVariant` (`default` o `primary`) y `secondaryActionLabel` (acción `ghost` después de la primaria). La secundaria emite `secondaryAction` con la variante; no se pinta sin acción primaria.
+
+```html
+<tb-data-table …>
+  <tb-cursor-pager tbFooter [page]="page()" [hasNext]="hasNext()" [count]="rows().length" [itemLabel]="label" (first)="toFirst()" (previous)="toPrevious()" (next)="toNext()" />
+</tb-data-table>
+```
+
+## CursorPager
+
+`<tb-cursor-pager>` (PZ-23, D-053). Paginador para listas por cursor opaco: muestra «Página n · N productos» y no tiene total ni salto de página.
+
+| Entrada | Valores |
+|---|---|
+| `page` | número de página (menor que 1 se trata como 1) |
+| `hasNext` | si hay más; sin él, «Siguiente» queda deshabilitado con el título «No hay más productos» |
+| `count`, `itemLabel` | elementos de esta página y `{ one, other }` |
+
+Salidas: `first`, `previous` y `next`. «Primera página» y «Anterior» (`ghost`, sin icono) aparecen desde la página 2; «Siguiente» lleva `chevron-right` y `aria-label` «Página siguiente». El `nav` se llama «Paginación». No conoce los cursores: quien lo usa los guarda.
+
+## EmptyState: acción secundaria (D-052)
+
+`actionVariant` (`default` o `primary`) y `secondaryActionLabel` con la salida `secondaryAction()`. La secundaria es `ghost`, va después de la primaria y no se pinta sin ella.
+
 ## Fuera de esta versión
 
-- DataTable: menú de columnas, CSV, ampliar columnas, columnas fijas, densidad, selección y paginación (PQ-2).
+- DataTable: menú de columnas, CSV, ampliar columnas, columnas fijas, densidad y selección.
 - Chip, Tooltip, botón de solo icono y atajo de teclado (PQ-3 y PQ-4).
 - `Icon` es interno (`components/icon/`): no se exporta ni se usa desde `src/app/`.
