@@ -429,7 +429,10 @@ describe('[EP00-TBR-004-CA4] TbDataTable states', () => {
 describe('[EP00-TBR-004-CA2] TbDataTable cells use the regional format', () => {
   it('[EP00-TBR-004-CA2] money, quantity, percent, date and status cells are formatted', () => {
     const { el } = render({ rows: makeRows(1) });
-    const cells = cellsOf(dataRows(el)[0]).map((c) => c.textContent?.replace(/\s+/g, ' ').trim());
+    // Collapse layout whitespace but keep U+00A0: the percent cell must carry it exactly (AJ-6).
+    const cells = cellsOf(dataRows(el)[0]).map((c) =>
+      c.textContent?.replace(/[^\S ]+/g, ' ').trim(),
+    );
     expect(cells[0]).toBe('Producto sintético 1');
     expect(cells[1]).toBe('$1,850,000');
     expect(cells[2]).toBe('1,234');
