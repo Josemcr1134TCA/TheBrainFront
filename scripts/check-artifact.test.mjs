@@ -12,6 +12,9 @@
 // [EP00-TBR-002-CA3] Round 1 adds tests for the review findings approved by the dev (docs/estado/EP00-TBR-002.md):
 // S1 linear JWT search, S2 entry guard through symlinks, S3 unsupported file types, Q1 globstar folder boundaries and
 // S6/Q2 broad exception paths. They are written before the fix, so they fail on commit d46985c.
+// [EP00-TBR-002-CA3] Round 1, phase a2 · L1: the PO, owner of the list (PO-2), approved in Slack (option a, all of it
+// in this story) widening the list with the S5 names and the S4 contents and fixes. Those tests are written before
+// the list and the script change, so the positive ones fail on commit d33a3c8 and the near-miss controls pass.
 // [EP00-TBR-002-CA1] package.json has typecheck (R1) plus ci:test and artifact:check with the exact text of §8.6.
 // Synthetic secrets are assembled at runtime so no key-like string is committed (RG-4). No real data.
 // Fixtures live under tmp/ (ignored by git) and are removed afterwards.
@@ -29,7 +32,42 @@ const LIST = join(FRONT, "scripts", "forbidden-artifact-patterns.json");
 const TMP = join(FRONT, "tmp");
 const CHILD_TIMEOUT_MS = 60_000;
 
+// [EP00-TBR-002-CA3] L1 · S5 names approved by the PO. Format of `name` (the one the list already uses for wrangler.*,
+// *.pem and id_rsa*, so `names` needs no new field): a glob matched against the whole base name of a file, in any
+// folder of the artifact, ignoring case, where "*" stands for zero or more characters other than "/". So "*.tfstate"
+// and "*-firebase-adminsdk-*.json" go into `name` as written here. `samples` are planted at the root, in browser/ and
+// in browser/assets/i18n/, in three spellings.
+const mixedCase = (s) => [...s].map((c, i) => (i % 2 ? c.toUpperCase() : c.toLowerCase())).join("");
+const literalSamples = (name) => [name, name.toUpperCase(), mixedCase(name)];
+const L1_NAMES = [
+  { id: "vercel-legacy-config", kind: "file", name: "now.json" },
+  { id: "vercel-ignore", kind: "file", name: ".vercelignore" },
+  { id: "cloudflare-routes", kind: "file", name: "_routes.json" },
+  { id: "cloudflare-worker", kind: "file", name: "_worker.js" },
+  { id: "fly-config", kind: "file", name: "fly.toml" },
+  { id: "render-config", kind: "file", name: "render.yaml" },
+  { id: "firebase-app-hosting", kind: "file", name: "apphosting.yaml" },
+  { id: "npm-config", kind: "file", name: ".npmrc" },
+  { id: "netrc-file", kind: "file", name: ".netrc" },
+  { id: "git-credentials", kind: "file", name: ".git-credentials" },
+  { id: "terraform-state", kind: "file", name: "*.tfstate", samples: ["terraform.tfstate", "PROD.TFSTATE", "synthetic-env.TfState"] },
+  {
+    id: "firebase-admin-sdk-key",
+    kind: "file",
+    name: "*-firebase-adminsdk-*.json",
+    samples: ["synthetic-project-firebase-adminsdk-ab1cd-0123456789.json", "SYNTH-FIREBASE-ADMINSDK-X1Y2Z-ABC.JSON", "synth-app-Firebase-AdminSdk-q9w8e-ff00.Json"],
+  },
+].map((r) => ({ ...r, samples: r.samples ?? literalSamples(r.name) }));
+const L1_NAME_IDS = new Set(L1_NAMES.map((r) => r.id));
+// [EP00-TBR-002-CA3] L1 · S4 content rules approved by the PO (new ids). The PGP block is a fix of private-key-block.
+const L1_CONTENTS = [
+  { id: "npm-token", kind: "regex" },
+  { id: "anthropic-api-key", kind: "regex" },
+  { id: "ai-provider-secret-key", kind: "regex" },
+];
+
 // [EP00-TBR-002-CA3] R3 · Mandatory minimum (design §8.4). Literal copy: same id, kind and name, or same kind and role.
+// L1 adds every new name and content rule, so none of them can leave the list or get an exception in silence (PO-2).
 const MINIMUM = {
   names: [
     { id: "vercel-config", kind: "file", name: "vercel.json" },
@@ -37,12 +75,14 @@ const MINIMUM = {
     { id: "netlify-config", kind: "file", name: "netlify.toml" },
     { id: "firebase-config", kind: "file", name: "firebase.json" },
     { id: "env-file", kind: "file", name: ".env" },
+    ...L1_NAMES.map(({ id, kind, name }) => ({ id, kind, name })),
   ],
   contents: [
     { id: "private-key-block", kind: "regex" },
     { id: "service-role-jwt", kind: "jwt-role", role: "service_role" },
     { id: "supabase-secret-key", kind: "regex" },
     { id: "postgres-url-with-password", kind: "regex" },
+    ...L1_CONTENTS,
   ],
 };
 const MINIMUM_IDS = [...MINIMUM.names, ...MINIMUM.contents].map((r) => r.id);
@@ -282,7 +322,8 @@ describe("[EP00-TBR-002-CA3] check-artifact passes a clean artifact", () => {
 });
 
 describe("[EP00-TBR-002-CA3] forbidden names (mandatory minimum)", () => {
-  for (const rule of MINIMUM.names) {
+  // The L1 names are planted below, in every folder and spelling.
+  for (const rule of MINIMUM.names.filter((r) => !L1_NAME_IDS.has(r.id))) {
     const path = `browser/${rule.name}`;
     test(`[EP00-TBR-002-CA3] fails and names ${path} with ${rule.id} when it is planted`, () => {
       const planted = rule.kind === "dir" ? { [`${path}/project.json`]: '{"projectId":"synthetic"}\n' } : { [path]: "synthetic=1\n" };
@@ -412,6 +453,97 @@ describe("[EP00-TBR-002-CA3] forbidden contents (mandatory minimum)", () => {
     const bytes = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0xff]), Buffer.from(`\n${triggerOf("service-role-jwt")}\n`), Buffer.from([0, 1, 2])]);
     const r = scan(makeArtifact({ "browser/media/logo.png": bytes }));
     assertFinding(r, "browser/media/logo.png", "service-role-jwt");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Round 1, phase a2 · L1 (S4 and S5): list extension approved by the PO. Synthetic triggers assembled at runtime.
+// ---------------------------------------------------------------------------------------------
+const pgpBlock = (kind) =>
+  [`${DASHES}${"BEG" + "IN"} PGP ${kind} KEY BLOCK${DASHES}`, "", "lQ" + "U3ludGhldGljVGVzdE9ubHk".repeat(3), `${DASHES}${"EN" + "D"} PGP ${kind} KEY BLOCK${DASHES}`].join("\n");
+const wrapInString = (s) => `const k="${s}";`;
+// `secret` is what the output may not show; `line` is the text planted on line 2 of the bundle.
+const L1_TRIGGERS = [
+  { id: "npm-token", label: "an npm_ token (npm_ + 36 alphanumerics)", value: () => "np" + "m_" + "SyntheticNpmToken" + "0".repeat(19) },
+  { id: "anthropic-api-key", label: "an sk-ant- key", value: () => "sk" + "-ant-" + "api03-" + "SyntheticAnthropicTestValue" + "Q".repeat(60) + "-" + "x".repeat(6) + "AA" },
+  { id: "ai-provider-secret-key", label: "a legacy sk- key (sk- + 48 alphanumerics)", value: () => "sk" + "-" + "SyntheticOpenAiTestValue" + "0".repeat(24) },
+  { id: "ai-provider-secret-key", label: "a project sk-proj- key with _ and -", value: () => "sk" + "-proj-" + "Synthetic_Project-Key" + "Z".repeat(100) },
+  { id: "ai-provider-secret-key", label: "an sk- key at the minimum length (32 characters after sk-)", value: () => "sk" + "-" + "Synth32" + "0".repeat(25) },
+  { id: "private-key-block", label: "a PGP private key block (fix)", value: () => pgpBlock("PRIV" + "ATE") },
+  { id: "google-api-key", label: "a Google key that ends in - right before a quote (fix of the final \\b)", value: () => "AI" + "za" + "SyntheticGoogleKey" + "0".repeat(16) + "-" },
+  { id: "github-token", label: "a GitHub token glued after a word character (fix)", value: () => "gh" + "p_" + "SyntheticGitHubToken" + "0".repeat(16), line: (s) => `const k="TOKEN_${s}";` },
+  { id: "github-token", label: "a GitHub token glued before a word character (fix)", value: () => "gh" + "p_" + "SyntheticGitHubToken" + "0".repeat(16), line: (s) => `const k="${s}x1";` },
+].map((t) => ({ line: wrapInString, ...t }));
+// Near misses that must keep giving 0 findings, before and after the extension. "sk-" is short, so the rule needs
+// at least 32 characters after "sk-" and no letter or digit right before "s" (task-…, disk-…).
+const NEAR_MISS_JS = () =>
+  [
+    "/* synthetic near misses */",
+    `const cls=["task-list","disk-usage","task-list-item-checkbox-container-with-long-suffix","disk-usage-indicator-progress-bar-segment-label"];`,
+    `const env=["npm_config_registry","npm_package_version","npm_lifecycle_event"];`,
+    `const short=["sk-short-1234","${"sk" + "-" + "Synth31" + "0".repeat(24)}","ghp_short","AIzaShort"];`,
+    `const pub=${JSON.stringify(pgpBlock("PUB" + "LIC"))};`,
+    `const sig="${DASHES}${"BEG" + "IN"} PGP SIGNATURE${DASHES}";`,
+    "export{cls,env,short,pub,sig};",
+  ].join("\n");
+const NEAR_MISS_NAMES = ["browser/worker-SYNTH0003.js", "browser/assets/routes.json", "browser/assets/snow.json", "browser/assets/npmrc.txt"];
+
+describe("[EP00-TBR-002-CA3] list extension approved by the PO (L1: S4 contents and fixes, S5 names)", () => {
+  // One feasible reading of each rule, used only to prove the synthetic data has the intended shape. The list may use
+  // other patterns as long as the tests below pass.
+  const REFERENCE = {
+    "npm-token": /\bnpm_[A-Za-z0-9]{36}/u,
+    "anthropic-api-key": /(?<![A-Za-z0-9])sk-ant-[A-Za-z0-9_-]{32,}/u,
+    "ai-provider-secret-key": /(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{32,}/u,
+    "private-key-block": new RegExp(`${DASHES}${"BEG" + "IN"} (?:[A-Z0-9]+ )*PRIV${"ATE"} KEY(?: BLOCK)?${DASHES}`, "u"),
+    "google-api-key": /AIza[0-9A-Za-z_-]{35}/u,
+    "github-token": /gh[pousr]_[A-Za-z0-9]{36}/u,
+  };
+  // The two patterns as they stand on d46985c, to prove the fixes target their boundaries.
+  const CURRENT = {
+    "google-api-key": /\bAIza[0-9A-Za-z_-]{35}\b/u,
+    "github-token": /\b(?:gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{60,})\b/u,
+  };
+
+  test("[EP00-TBR-002-CA3] self-check: the L1 triggers have the intended shapes and the near misses have none", () => {
+    for (const t of L1_TRIGGERS) assert.match(t.line(t.value()), REFERENCE[t.id], `${t.label} no tiene la forma de ${t.id}`);
+    assert.match(L1_TRIGGERS[0].value(), /^npm_[A-Za-z0-9]{36}$/u, "el token npm_ debe tener 36 alfanuméricos");
+    assert.match(L1_TRIGGERS[2].value(), /^sk-[A-Za-z0-9]{48}$/u, "la llave sk- clásica debe tener 48 alfanuméricos");
+    assert.equal(L1_TRIGGERS[4].value().length - "sk-".length, 32, "la llave sk- mínima debe tener 32 caracteres tras sk-");
+    for (const t of L1_TRIGGERS.filter((x) => x.id in CURRENT)) {
+      assert.doesNotMatch(t.line(t.value()), CURRENT[t.id], `${t.label}: el patrón actual ya lo detecta, el caso no prueba el ajuste`);
+    }
+    for (const [id, re] of Object.entries(REFERENCE)) assert.doesNotMatch(NEAR_MISS_JS(), re, `los casos cercanos no deben tener la forma de ${id}`);
+    assert.ok(NEAR_MISS_JS().includes(`${"BEG" + "IN"} PGP PUB`), "el control lleva un bloque PGP público");
+  });
+
+  for (const rule of L1_NAMES) {
+    const paths = [rule.samples[0], `browser/${rule.samples[1]}`, `browser/assets/i18n/${rule.samples[2]}`];
+    test(`[EP00-TBR-002-CA3] S5: ${rule.id} (${rule.name}) fires by name in any folder and ignoring case: ${paths.join(", ")}`, () => {
+      const r = scan(makeArtifact(Object.fromEntries(paths.map((p) => [p, "synthetic=1\n"]))));
+      for (const path of paths) assertFinding(r, path, rule.id);
+    });
+  }
+
+  for (const t of L1_TRIGGERS) {
+    test(`[EP00-TBR-002-CA3] S4: fails on ${t.id} (${t.label}) with its line and never prints the value in full`, () => {
+      const secret = t.value();
+      const r = scan(makeArtifact({ [MAIN_JS]: `/* synthetic bundle */\n${t.line(secret)}\nexport{k};\n` }));
+      assertFinding(r, MAIN_JS, t.id, 2);
+      assert.deepEqual(leakedPieces(r.output, secret), [], `la salida muestra más de ${MAX_SHOWN} caracteres seguidos del secreto sintético`);
+    });
+  }
+
+  test("[EP00-TBR-002-CA3] S4 control: task-list, disk-usage, npm_config_*, short sk- strings and a PGP public block give 0 findings", () => {
+    const r = scan(makeArtifact({ "browser/chunk-NEARMISS.js": NEAR_MISS_JS() }));
+    assert.equal(r.status, 0, `los casos cercanos no son secretos y deben pasar\n${r.output}`);
+    assert.match(r.stdout, CLEAN_RE, r.output);
+  });
+
+  test("[EP00-TBR-002-CA3] S5 control: worker-*.js, routes.json, snow.json and npmrc.txt give 0 findings", () => {
+    const r = scan(makeArtifact(Object.fromEntries(NEAR_MISS_NAMES.map((p) => [p, "export{};\n"]))));
+    assert.equal(r.status, 0, `estos nombres no están prohibidos y deben pasar\n${r.output}`);
+    assert.match(r.stdout, CLEAN_RE, r.output);
   });
 });
 
