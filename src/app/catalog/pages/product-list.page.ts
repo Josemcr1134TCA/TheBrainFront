@@ -54,16 +54,16 @@ export class ProductListPage implements OnDestroy {
   protected readonly itemLabel: TbItemLabel = { one: 'producto', other: 'productos' };
 
   protected readonly columns: readonly TbColumn<Product>[] = [
-    { id: 'code', header: 'Código', type: 'text', value: (p) => p.code },
-    { id: 'name', header: 'Nombre', type: 'text', value: (p) => p.name },
-    { id: 'ean', header: 'EAN', type: 'text', value: (p) => p.ean },
-    { id: 'brand', header: 'Marca', type: 'text', value: (p) => p.brand },
-    { id: 'supplier', header: 'Proveedor', type: 'text', value: (p) => p.supplier?.name },
-    { id: 'presentation', header: 'Presentación', type: 'text', value: (p) => p.presentation },
-    { id: 'department', header: 'Departamento', type: 'text', value: (p) => p.classification.department },
-    { id: 'subDepartment', header: 'Sub departamento', type: 'text', value: (p) => p.classification.subDepartment },
-    { id: 'category', header: 'Categoría', type: 'text', value: (p) => p.classification.category },
-    { id: 'subCategory', header: 'Sub categoría', type: 'text', value: (p) => p.classification.subCategory },
+    { id: 'code', track: '104px', header: 'Código', type: 'text', value: (p) => p.code },
+    { id: 'name', track: '200px', header: 'Nombre', type: 'text', value: (p) => p.name },
+    { id: 'ean', track: '140px', header: 'EAN', type: 'text', value: (p) => p.ean },
+    { id: 'brand', track: '130px', header: 'Marca', type: 'text', value: (p) => p.brand },
+    { id: 'supplier', track: '160px', header: 'Proveedor', type: 'text', value: (p) => p.supplier?.name },
+    { id: 'presentation', track: '130px', header: 'Presentación', type: 'text', value: (p) => p.presentation },
+    { id: 'department', track: '130px', header: 'Departamento', type: 'text', value: (p) => p.classification.department },
+    { id: 'subDepartment', track: '160px', header: 'Sub departamento', type: 'text', value: (p) => p.classification.subDepartment },
+    { id: 'category', track: '140px', header: 'Categoría', type: 'text', value: (p) => p.classification.category },
+    { id: 'subCategory', track: '150px', header: 'Sub categoría', type: 'text', value: (p) => p.classification.subCategory },
   ];
 
   protected readonly rowKey = (product: Product): string => product.code;
@@ -84,12 +84,12 @@ export class ProductListPage implements OnDestroy {
     const failure = this.failure();
     const code = failure?.code ?? 'UNAVAILABLE';
     const base = BY_CODE[code];
-    const message = [failure?.message, base.phrase, failure?.correlationId ? `Referencia: ${failure.correlationId}` : null]
-      .filter((part): part is string => !!part)
-      .join(' ');
+    const message = [failure?.message, base.phrase].filter((part): part is string => part !== null && part !== undefined && part !== '');
+    const reference = failure?.correlationId ?? undefined;
     const error: TbTableText = {
       heading: base.heading,
       message,
+      reference,
       ...this.actionsOf(code),
     };
     return {
@@ -98,7 +98,7 @@ export class ProductListPage implements OnDestroy {
         message: 'Cuando haya productos registrados, aparecerán aquí.',
       },
       'no-results': { heading: '', message: '' },
-      forbidden: { heading: BY_CODE.FORBIDDEN.heading, message },
+      forbidden: { heading: BY_CODE.FORBIDDEN.heading, message, reference },
       offline: { heading: '', message: '' },
       error,
     };
@@ -139,13 +139,14 @@ export class ProductListPage implements OnDestroy {
       case 'INVALID_CURSOR':
         return { actionLabel: GO_FIRST, actionVariant: 'primary' };
       default:
-        return {};
+        return { actionLabel: null };
     }
   }
 
   private request(request: Request): void {
     this.running?.unsubscribe();
     this.pending = request;
+    this.failure.set(null);
     this.state.set('loading');
     this.running = this.port.list({ cursor: request.cursor }).subscribe({
       next: (page) => this.show(request, page),
