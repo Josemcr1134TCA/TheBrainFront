@@ -52,12 +52,12 @@ function globToRegExp(glob, ignoreCase = false) {
 }
 
 // An exception must name files: the last segment of its path may not hold "**" and its name (before the first ".",
-// not counting a leading ".") needs at least one character other than "*".
+// not counting a leading ".") needs at least 3 alphanumeric characters in a row.
 function exceptionPathTooBroad(path) {
-  const last = path.trim().split("/").pop();
+  const last = path.split("/").pop();
   if (last.includes("**")) return true;
   const stem = (last.startsWith(".") ? last.slice(1) : last).split(".")[0];
-  return !/[^*]/.test(stem);
+  return !/[A-Za-z0-9]{3}/.test(stem);
 }
 
 export function loadPatternList(path) {
@@ -134,8 +134,10 @@ export function validatePatternList(list) {
     }
     if (!contentIds.has(exception.rule)) errors.push(`${label}: la regla «${exception.rule}» no es una regla de contenido existente`);
     if (typeof exception.path !== "string" || !exception.path.trim()) errors.push(`${label}: falta la ruta (path)`);
-    else if (PURE_WILDCARD_RE.test(exception.path.trim())) errors.push(`${label}: la ruta «${exception.path}» es un comodín puro`);
-    else if (exceptionPathTooBroad(exception.path)) errors.push(`${label}: la ruta «${exception.path}» exime demasiado; el último tramo debe nombrar archivos (sin «**» y con algún carácter fijo antes del primer punto)`);
+    else if (exception.path !== exception.path.trim()) errors.push(`${label}: la ruta «${exception.path}» no puede llevar espacios al inicio ni al final`);
+    else if (exception.path.startsWith("/") || exception.path.startsWith("./")) errors.push(`${label}: la ruta «${exception.path}» debe ser relativa al artefacto, sin «/» ni «./» al inicio`);
+    else if (PURE_WILDCARD_RE.test(exception.path)) errors.push(`${label}: la ruta «${exception.path}» es un comodín puro`);
+    else if (exceptionPathTooBroad(exception.path)) errors.push(`${label}: la ruta «${exception.path}» exime demasiado; el último tramo debe nombrar archivos (sin «**» y con al menos 3 letras o dígitos seguidos antes del primer punto)`);
     if (typeof exception.reason !== "string" || !exception.reason.trim()) errors.push(`${label}: falta el motivo (reason)`);
     if (typeof exception.decision !== "string" || !exception.decision.trim()) errors.push(`${label}: falta la decisión (decision)`);
   });
@@ -167,12 +169,20 @@ function contentMatches(rule, text) {
         offset += part.length + 1;
         return at;
       });
+      // Smallest base64url payload that can hold {"role":"<role>"}; shorter parts are never decoded.
+      const minLength = Math.ceil(((rule.role.length + 10) * 4) / 3) - 1;
+      const roles = new Array(parts.length); // each part is decoded at most once
+      const roleOf = (n) => {
+        if (roles[n] === undefined) roles[n] = parts[n].length < minLength ? null : (decodeRole(parts[n]) ?? null);
+        return roles[n];
+      };
       for (let i = 0; i + 2 < parts.length; i++) {
         const k = parts[i].indexOf("eyJ");
         if (k < 0 || !parts[i + 1].startsWith("eyJ") || !parts[i + 2]) continue;
+        if (roleOf(i + 1) !== rule.role) continue;
         const from = starts[i] + k;
         const to = starts[i + 2] + parts[i + 2].length;
-        if (decodeRole(parts[i + 1]) === rule.role) matches.push({ index: run.index + from, text: run[0].slice(from, to) });
+        matches.push({ index: run.index + from, text: run[0].slice(from, to) });
         i += 2;
       }
     }
