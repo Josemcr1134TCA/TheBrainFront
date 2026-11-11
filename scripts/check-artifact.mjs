@@ -3,7 +3,7 @@
 // The list is fixed at scripts/forbidden-artifact-patterns.json: there is no option to swap it.
 // Fails closed: a missing artifact, a bad list, symlinks and unreadable files all fail the review.
 // Findings never carry a secret in full: only the rule id, the path, the line and at most 6 characters plus «…».
-import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -13,21 +13,34 @@ const DEFAULT_DIR = join(root, "dist", "the-brain-front");
 const NAME_KINDS = new Set(["file", "dir"]);
 const CONTENT_KINDS = new Set(["regex", "jwt-role"]);
 const SAMPLE_LENGTH = 6;
-const JWT_RE = /eyJ[\w-]*\.(eyJ[\w-]*)\.[\w-]+/g;
+// JWT search in linear time: split every run of token characters at the dots instead of backtracking a regex.
+const TOKEN_RUN_RE = /[\w.-]+/g;
 const PURE_WILDCARD_RE = /^\*+(?:\/\*+)*$/;
 
 const USAGE = "Uso: node scripts/check-artifact.mjs [--dir <ruta>]";
 
-// Glob to RegExp. "*" never crosses "/", "**" does. Matching is case sensitive unless `ignoreCase` is set.
+// Glob to RegExp. "*" never crosses "/". "**" is a globstar only as a whole segment: "**/" is zero or more whole
+// folders and a final "**" is anything below; glued to a name it behaves like "*". Case sensitive unless `ignoreCase`.
 function globToRegExp(glob, ignoreCase = false) {
   let source = "";
   for (let i = 0; i < glob.length; i++) {
     const ch = glob[i];
     if (ch === "*") {
       if (glob[i + 1] === "*") {
-        source += ".*";
-        i++;
-        if (glob[i + 1] === "/") i++;
+        let end = i + 1;
+        while (glob[end + 1] === "*") end++;
+        const atStart = i === 0 || glob[i - 1] === "/";
+        const next = glob[end + 1];
+        if (atStart && next === "/") {
+          source += "(?:[^/]+/)*";
+          i = end + 1;
+        } else if (atStart && next === undefined) {
+          source += ".*";
+          i = end;
+        } else {
+          source += "[^/]*";
+          i = end;
+        }
       } else {
         source += "[^/]*";
       }
@@ -36,6 +49,15 @@ function globToRegExp(glob, ignoreCase = false) {
     }
   }
   return new RegExp(`^${source}$`, ignoreCase ? "iu" : "u");
+}
+
+// An exception must name files: the last segment of its path may not hold "**" and its name (before the first ".",
+// not counting a leading ".") needs at least one character other than "*".
+function exceptionPathTooBroad(path) {
+  const last = path.trim().split("/").pop();
+  if (last.includes("**")) return true;
+  const stem = (last.startsWith(".") ? last.slice(1) : last).split(".")[0];
+  return !/[^*]/.test(stem);
 }
 
 export function loadPatternList(path) {
@@ -113,6 +135,7 @@ export function validatePatternList(list) {
     if (!contentIds.has(exception.rule)) errors.push(`${label}: la regla «${exception.rule}» no es una regla de contenido existente`);
     if (typeof exception.path !== "string" || !exception.path.trim()) errors.push(`${label}: falta la ruta (path)`);
     else if (PURE_WILDCARD_RE.test(exception.path.trim())) errors.push(`${label}: la ruta «${exception.path}» es un comodín puro`);
+    else if (exceptionPathTooBroad(exception.path)) errors.push(`${label}: la ruta «${exception.path}» exime demasiado; el último tramo debe nombrar archivos (sin «**» y con algún carácter fijo antes del primer punto)`);
     if (typeof exception.reason !== "string" || !exception.reason.trim()) errors.push(`${label}: falta el motivo (reason)`);
     if (typeof exception.decision !== "string" || !exception.decision.trim()) errors.push(`${label}: falta la decisión (decision)`);
   });
@@ -136,8 +159,22 @@ function contentMatches(rule, text) {
   if (rule.kind === "regex") {
     for (const m of text.matchAll(new RegExp(rule.pattern, "gu"))) matches.push({ index: m.index, text: m[0] });
   } else {
-    for (const m of text.matchAll(JWT_RE)) {
-      if (decodeRole(m[1]) === rule.role) matches.push({ index: m.index, text: m[0] });
+    for (const run of text.matchAll(TOKEN_RUN_RE)) {
+      const parts = run[0].split(".");
+      let offset = 0;
+      const starts = parts.map((part) => {
+        const at = offset;
+        offset += part.length + 1;
+        return at;
+      });
+      for (let i = 0; i + 2 < parts.length; i++) {
+        const k = parts[i].indexOf("eyJ");
+        if (k < 0 || !parts[i + 1].startsWith("eyJ") || !parts[i + 2]) continue;
+        const from = starts[i] + k;
+        const to = starts[i + 2] + parts[i + 2].length;
+        if (decodeRole(parts[i + 1]) === rule.role) matches.push({ index: run.index + from, text: run[0].slice(from, to) });
+        i += 2;
+      }
     }
   }
   return matches;
@@ -174,7 +211,10 @@ function scanDetailed(dir, list) {
         walk(abs);
         continue;
       }
-      if (!entry.isFile()) continue;
+      if (!entry.isFile()) {
+        findings.push({ rule: "unsupported-type", path, line: 0, sample: "tipo de archivo no admitido (FIFO, socket o dispositivo); no se lee" });
+        continue;
+      }
       files++;
       let text;
       try {
@@ -257,6 +297,17 @@ function main(argv) {
   console.log(`check-artifact: 0 hallazgos en ${files} archivo(s) de ${shown}; listo para subir`);
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Entry guard on real paths, so a call through a symlink still runs the review (never fails open).
+function isEntryPoint() {
+  if (!process.argv[1]) return false;
+  const self = fileURLToPath(import.meta.url);
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(self);
+  } catch {
+    return resolve(process.argv[1]) === self;
+  }
+}
+
+if (isEntryPoint()) {
   main(process.argv.slice(2));
 }

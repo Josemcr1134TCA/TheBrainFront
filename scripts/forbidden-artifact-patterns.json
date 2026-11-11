@@ -21,20 +21,35 @@
     { "id": "pkcs12-file", "kind": "file", "name": "*.p12", "reason": "almacén de llaves" },
     { "id": "pfx-file", "kind": "file", "name": "*.pfx", "reason": "almacén de llaves" },
     { "id": "ssh-key-file", "kind": "file", "name": "id_rsa*", "reason": "llave SSH" },
-    { "id": "ssh-ed25519-file", "kind": "file", "name": "id_ed25519*", "reason": "llave SSH" }
+    { "id": "ssh-ed25519-file", "kind": "file", "name": "id_ed25519*", "reason": "llave SSH" },
+    { "id": "vercel-legacy-config", "kind": "file", "name": "now.json", "reason": "configuración heredada de Vercel" },
+    { "id": "vercel-ignore", "kind": "file", "name": ".vercelignore", "reason": "reglas de subida de Vercel" },
+    { "id": "cloudflare-routes", "kind": "file", "name": "_routes.json", "reason": "rutas de Cloudflare Pages" },
+    { "id": "cloudflare-worker", "kind": "file", "name": "_worker.js", "reason": "worker de Cloudflare Pages" },
+    { "id": "fly-config", "kind": "file", "name": "fly.toml", "reason": "configuración de Fly.io" },
+    { "id": "render-config", "kind": "file", "name": "render.yaml", "reason": "configuración de Render" },
+    { "id": "firebase-app-hosting", "kind": "file", "name": "apphosting.yaml", "reason": "configuración de Firebase App Hosting" },
+    { "id": "npm-config", "kind": "file", "name": ".npmrc", "reason": "configuración de npm (puede contener tokens)" },
+    { "id": "netrc-file", "kind": "file", "name": ".netrc", "reason": "credenciales de red" },
+    { "id": "git-credentials", "kind": "file", "name": ".git-credentials", "reason": "credenciales de git" },
+    { "id": "terraform-state", "kind": "file", "name": "*.tfstate", "reason": "estado de Terraform (puede contener secretos)" },
+    { "id": "firebase-admin-sdk-key", "kind": "file", "name": "*-firebase-adminsdk-*.json", "reason": "llave de cuenta de servicio de Firebase" }
   ],
   "contents": [
-    { "id": "private-key-block", "kind": "regex", "pattern": "-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----", "reason": "llave privada" },
+    { "id": "private-key-block", "kind": "regex", "pattern": "-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----", "reason": "llave privada" },
     { "id": "service-role-jwt", "kind": "jwt-role", "role": "service_role", "reason": "llave service_role de Supabase" },
     { "id": "supabase-secret-key", "kind": "regex", "pattern": "\\bsb_secret_[A-Za-z0-9_-]{20,}", "reason": "llave secreta de Supabase" },
     { "id": "supabase-service-role-env", "kind": "regex", "pattern": "\\bSUPABASE_SERVICE_ROLE(?:_KEY)?\\b", "reason": "variable de la llave service_role de Supabase" },
     { "id": "vercel-token-env", "kind": "regex", "pattern": "\\bVERCEL_(?:TOKEN|OIDC_TOKEN)\\b", "reason": "variable de token de Vercel" },
     { "id": "postgres-url-with-password", "kind": "regex", "pattern": "postgres(?:ql)?://[^\\s:@/'\"`]+:[^\\s@/'\"`]+@", "reason": "cadena de conexión a PostgreSQL con contraseña" },
-    { "id": "github-token", "kind": "regex", "pattern": "\\b(?:gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{60,})\\b", "reason": "token de GitHub" },
+    { "id": "github-token", "kind": "regex", "pattern": "(?:gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{60,})", "reason": "token de GitHub" },
     { "id": "aws-access-key-id", "kind": "regex", "pattern": "\\b(?:AKIA|ASIA)[0-9A-Z]{16}\\b", "reason": "llave de acceso de AWS" },
     { "id": "stripe-secret-key", "kind": "regex", "pattern": "\\b[sr]k_(?:live|test)_[0-9A-Za-z]{20,}\\b", "reason": "llave secreta de Stripe" },
     { "id": "slack-token", "kind": "regex", "pattern": "\\bxox[abposr]-[0-9A-Za-z-]{10,}", "reason": "token de Slack" },
-    { "id": "google-api-key", "kind": "regex", "pattern": "\\bAIza[0-9A-Za-z_-]{35}\\b", "reason": "llave de API de Google o Firebase" }
+    { "id": "google-api-key", "kind": "regex", "pattern": "\\bAIza[0-9A-Za-z_-]{35}", "reason": "llave de API de Google o Firebase" },
+    { "id": "npm-token", "kind": "regex", "pattern": "(?<![A-Za-z0-9])npm_[A-Za-z0-9]{36}", "reason": "token de npm" },
+    { "id": "anthropic-api-key", "kind": "regex", "pattern": "(?<![A-Za-z0-9])sk-ant-[A-Za-z0-9_-]{32,}", "reason": "llave de API de Anthropic" },
+    { "id": "ai-provider-secret-key", "kind": "regex", "pattern": "(?<![A-Za-z0-9])sk-(?!ant-)[A-Za-z0-9_-]{32,}", "reason": "llave secreta de un proveedor de IA" }
   ],
   "exceptions": []
 }
