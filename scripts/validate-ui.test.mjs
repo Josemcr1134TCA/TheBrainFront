@@ -4,11 +4,15 @@
 // ds:validate is wired with --test plus this suite (DA-1 a), no legacy Spanish code is left in
 // scripts/ or .dependency-cruiser.cjs, and the messages for people stay in Spanish.
 // Written from the acceptance criteria and the design (docs/diseno/EP00-TBR-014.md, DA-1, DA-3, DA-5).
+// [EP00-TBR-004-CA1] The validator reviews src/ui/components/ and src/ui/format/ but not src/ui/tokens/ or src/ui/docs/
+// (DA-2, isReviewed); the pieces only use variables of tokens.flat.json and utility classes that compile against theme.css.
+// [EP00-TBR-004-CA3] Static checks that jsdom cannot make: focus ring with the focus token, reduced motion, ellipsis,
+// and the contrast pairs used by the pieces listed in tokens.json (design docs/diseno/EP00-TBR-004.md §1.4, §4, §6).
 // Run: node --test scripts/validate-ui.test.mjs
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
@@ -461,4 +465,264 @@ describe("no Spanish code in scripts/ and .dependency-cruiser.cjs", () => {
       .filter((f) => identifierParts(basename(f).replace(/\..*$/, "")).some((p) => SPANISH_WORDS.has(p)));
     assert.deepEqual(bad, []);
   });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// EP00-TBR-004 · design system pieces and formats (docs/diseno/EP00-TBR-004.md §1.4, §2.1, §3, §4 and §6).
+// ---------------------------------------------------------------------------------------------------------------
+const UI = join(FRONT, "src", "ui");
+const COMPONENTS = join(UI, "components");
+const FORMAT = join(UI, "format");
+// The 9 piece folders of the design (§1.1): icon/ is internal, the other 8 are the pieces of the story.
+const PIECES = ["icon", "button", "status-badge", "banner", "skeleton", "empty-state", "filter-select", "tabs", "data-table"];
+const TOKEN_NAMES = new Set(Object.keys(JSON.parse(readFileSync(join(UI, "tokens", "tokens.flat.json"), "utf8"))));
+const isReviewed = validateUi.isReviewed;
+const toPosix = (p) => relative(FRONT, p).split("\\").join("/");
+
+// Source files of a folder (recursive): .ts, .html and .css, without *.spec.ts. Empty when the folder is missing.
+function sourcesOf(dir) {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir, { recursive: true })
+    .map(String)
+    .filter((f) => /\.(?:ts|html|css)$/.test(f) && !f.endsWith(".spec.ts"))
+    .map((f) => join(dir, f));
+}
+const pieceSources = (piece) => sourcesOf(join(COMPONENTS, piece));
+const readAll = (files) => files.map((f) => readFileSync(f, "utf8")).join("\n");
+
+// Custom properties a piece declares itself (for example --cols, passed by style; design §3.4).
+function declaredVariables(text) {
+  const names = new Set();
+  for (const re of [/(--[\w-]+)\s*:/g, /style\.(--[\w-]+)/g, /setProperty\(\s*["'`](--[\w-]+)/g]) {
+    for (const m of text.matchAll(re)) names.add(m[1]);
+  }
+  return names;
+}
+// Every var(--x) and every Tailwind -(--x) that is neither a token of tokens.flat.json nor declared by the piece.
+function unknownVariables(text, declared = declaredVariables(text)) {
+  const unknown = new Set();
+  for (const m of text.matchAll(/var\(\s*(--[\w-]+)|(?<=\w)-\((--[\w-]+)\)/g)) {
+    const name = m[1] ?? m[2];
+    if (!TOKEN_NAMES.has(name) && !declared.has(name)) unknown.add(name);
+  }
+  return [...unknown].sort();
+}
+
+// Class names written in templates and host metadata (static class lists, [class.x] bindings and host class).
+function templateClasses(text) {
+  const found = new Set();
+  const add = (list) => {
+    for (const c of list.replace(/\{\{[\s\S]*?\}\}/g, " ").split(/\s+/)) if (/^[!-]?[a-z][\w:/.%()-]*$/i.test(c)) found.add(c);
+  };
+  for (const m of text.matchAll(/(?<![\w.[-])class\s*=\s*"([^"]*)"/g)) add(m[1]);
+  for (const m of text.matchAll(/(?<![\w.[-])class\s*=\s*'([^']*)'/g)) add(m[1]);
+  for (const m of text.matchAll(/\bclass\s*:\s*["'`]([^"'`]*)["'`]/g)) add(m[1]);
+  for (const m of text.matchAll(/\[class\.([^\]=\s]+)\]/g)) add(m[1]);
+  return found;
+}
+// Class selectors defined by the piece's own styles (.css files and styles: in the component metadata).
+function ownSelectors(files) {
+  const css = files
+    .map((f) => {
+      const text = readFileSync(f, "utf8");
+      if (f.endsWith(".css")) return text;
+      if (f.endsWith(".ts")) return [...text.matchAll(/styles\s*:\s*\[?\s*`([^`]*)`/g)].map((m) => m[1]).join("\n");
+      return "";
+    })
+    .join("\n");
+  return new Set([...css.matchAll(/\.(-?[_a-zA-Z][\w-]*)/g)].map((m) => m[1]));
+}
+// Marker classes that never produce CSS on their own.
+const MARKER_CLASSES = /^(?:group|peer)(?:\/[\w-]+)?$/;
+
+// Compiles a list of classes with the Tailwind CLI against theme.css (same mechanism as scripts/test-theme.mjs).
+function compileWithTheme(classes) {
+  const tmp = join(FRONT, "node_modules", ".cache", "tb-ui-classes");
+  mkdirSync(tmp, { recursive: true });
+  const input = join(tmp, "input.css");
+  const output = join(tmp, "output.css");
+  const theme = join(UI, "tokens", "theme.css").split("\\").join("/");
+  writeFileSync(input, `@import "tailwindcss" source(none);\n@import "${theme}";\n@source inline("${[...classes].join(" ")}");\n`);
+  const cli = join(FRONT, "node_modules", "@tailwindcss", "cli", "dist", "index.mjs");
+  const r = spawnSync(process.execPath, [cli, "-i", input, "-o", output], { cwd: FRONT, encoding: "utf8", timeout: CHILD_TIMEOUT_MS });
+  assert.equal(r.status, 0, `Tailwind no compiló: ${r.stderr || r.stdout}`);
+  return readFileSync(output, "utf8");
+}
+const cssEscapeClass = (c) => c.replace(/[^\w-]/g, (ch) => `\\${ch}`);
+const compiles = (css, c) => new RegExp(`\\.${escapeRe(cssEscapeClass(c))}(?![\\w-])`).test(css);
+
+describe("[EP00-TBR-004-CA1] validate-ui reviews the design system pieces (DA-2)", () => {
+  const CASES = [
+    ["src/ui/components/button/button.ts", true],
+    ["src/ui/components/data-table/data-table.html", true],
+    ["src/ui/format/format.ts", true],
+    ["src/ui/index.ts", true],
+    ["src/app/app.ts", true],
+    ["src/ui/tokens/theme.css", false],
+    ["src/ui/tokens/tokens.plain.css", false],
+    ["src/ui/docs/components.css", false],
+    ["src/ui/docs/the-brain-design-system.html", false],
+    ["src/ui/components/button/button.spec.ts", false],
+    ["src/ui/format/format.spec.ts", false],
+    ["src/app/app.spec.ts", false],
+  ];
+  for (const [path, expected] of CASES) {
+    test(`[EP00-TBR-004-CA1] isReviewed("${path}") is ${expected}`, () => {
+      assert.equal(typeof isReviewed, "function", "validate-ui.mjs debe exportar isReviewed(relPath) (DA-2)");
+      assert.equal(isReviewed(path), expected, `isReviewed("${path}") debería ser ${expected}`);
+    });
+  }
+
+  test("[EP00-TBR-004-CA1] the full review of src/ uses isReviewed instead of skipping the whole of src/ui/", () => {
+    const src = readFileSync(SCRIPT, "utf8");
+    assert.doesNotMatch(src, /rel\s*===\s*["']src\/ui["']/, "validate-ui.mjs sigue saltando todo src/ui/");
+    const uses = [...lex(src).code.matchAll(/\bisReviewed\s*\(/g)].length;
+    assert.ok(uses >= 2, "isReviewed debe definirse y usarse al recorrer src/");
+  });
+
+  test("[EP00-TBR-004-CA1] the 9 piece folders exist and each one has at least one source .ts", () => {
+    const missing = PIECES.filter((p) => !pieceSources(p).some((f) => f.endsWith(".ts")));
+    assert.deepEqual(missing, [], `faltan piezas en src/ui/components/: ${missing.join(", ")}`);
+    assert.ok(sourcesOf(FORMAT).some((f) => f.endsWith("format.ts")), "falta src/ui/format/format.ts");
+  });
+});
+
+describe("[EP00-TBR-004-CA1] pieces and formats only use tokens", () => {
+  test("[EP00-TBR-004-CA1] unknownVariables detects the short v6 aliases and accepts tokens and local variables (self-check)", () => {
+    assert.deepEqual(unknownVariables(".x { color: var(--ink); padding: var(--space-3); }"), ["--ink", "--space-3"]);
+    assert.deepEqual(unknownVariables('<div class="bg-(--surface)"></div>'), ["--surface"]);
+    assert.deepEqual(unknownVariables(".x { color: var(--color-ink); height: var(--size-row); }"), []);
+    assert.deepEqual(unknownVariables('<div class="bg-(--color-accent)"></div>'), []);
+    assert.deepEqual(unknownVariables(".r { grid-template-columns: var(--cols); }\n<div [style.--cols]=\"cols()\"></div>"), []);
+  });
+
+  test("[EP00-TBR-004-CA1] every var(--x) and -(--x) in src/ui/components/ and src/ui/format/ exists in tokens.flat.json", () => {
+    const files = [...sourcesOf(COMPONENTS), ...sourcesOf(FORMAT)];
+    assert.ok(files.length > 0, "no hay fuentes en src/ui/components/ ni en src/ui/format/");
+    const bad = [];
+    for (const piece of PIECES) {
+      const own = pieceSources(piece);
+      const declared = declaredVariables(readAll(own));
+      for (const f of own) for (const name of unknownVariables(readFileSync(f, "utf8"), declared)) bad.push(`${toPosix(f)} ${name}`);
+    }
+    for (const f of sourcesOf(FORMAT)) for (const name of unknownVariables(readFileSync(f, "utf8"))) bad.push(`${toPosix(f)} ${name}`);
+    assert.deepEqual(bad, [], `variables que no están en tokens.flat.json:\n${bad.join("\n")}`);
+  });
+
+  test("[EP00-TBR-004-CA1] utility classes of the piece templates compile against theme.css (bg-white does not)", () => {
+    const candidates = new Map();
+    for (const piece of PIECES) {
+      const own = pieceSources(piece);
+      const selectors = ownSelectors(own);
+      for (const f of own) {
+        for (const c of templateClasses(readFileSync(f, "utf8"))) {
+          const bare = c.replace(/^!/, "");
+          if (bare.startsWith("tb-") || selectors.has(bare) || MARKER_CLASSES.test(bare)) continue;
+          candidates.set(bare, toPosix(f));
+        }
+      }
+    }
+    // Synthetic controls: token classes (one with a variant) that must compile and default palette classes that must not.
+    const controls = ["bg-surface", "focus-visible:outline-focus", "bg-white", "text-gray-500"];
+    const css = compileWithTheme(new Set([...candidates.keys(), ...controls]));
+    assert.ok(compiles(css, "bg-surface") && compiles(css, "focus-visible:outline-focus"), "control: las clases de tokens deben compilar con theme.css");
+    assert.ok(!compiles(css, "bg-white") && !compiles(css, "text-gray-500"), "control: la paleta por defecto no debe compilar");
+    assert.ok(pieceSources("button").length > 0, "no hay fuentes de piezas que revisar");
+    const bad = [...candidates].filter(([c]) => !compiles(css, c)).map(([c, f]) => `${f} ${c}`);
+    assert.deepEqual(bad, [], `clases que no salen de tokens.json (no compilan con theme.css):\n${bad.join("\n")}`);
+  });
+
+  test("[EP00-TBR-004-CA1] templateClasses reads class lists, [class.x] and host class (self-check)", () => {
+    const sample = `@Component({ host: { class: 'tb-btn inline-flex' }, template: \`<b class="bg-white {{ x }}" [class.text-ink]="on"></b>\` })`;
+    assert.deepEqual([...templateClasses(sample)].sort(), ["bg-white", "inline-flex", "tb-btn", "text-ink"]);
+  });
+
+  test("[EP00-TBR-004-CA1] no piece uses the Angular locale pipes (formats come from src/ui/format/, §2.2)", () => {
+    const bad = [];
+    for (const f of sourcesOf(COMPONENTS)) {
+      const text = readFileSync(f, "utf8");
+      if (/\b(?:CurrencyPipe|DecimalPipe|PercentPipe|DatePipe)\b/.test(text) || /\|\s*(?:currency|number|percent|date)\b/.test(text)) bad.push(toPosix(f));
+    }
+    assert.ok(sourcesOf(COMPONENTS).length > 0, "no hay fuentes en src/ui/components/");
+    assert.deepEqual(bad, [], `usa pipes de formato de Angular:\n${bad.join("\n")}`);
+  });
+});
+
+describe("[EP00-TBR-004-CA2] format.ts does not depend on the machine time zone (static)", () => {
+  const file = join(FORMAT, "format.ts");
+  test("[EP00-TBR-004-CA2] no local date getters and no toLocale*String() without options", () => {
+    assert.ok(existsSync(file), "falta src/ui/format/format.ts");
+    const { code } = lex(readFileSync(file, "utf8"));
+    assert.doesNotMatch(code, /\.get(?:Date|Day|FullYear|Month|Hours|Minutes|Seconds|Year)\s*\(/, "format.ts usa getters locales de Date");
+    assert.doesNotMatch(code, /\.toLocale(?:Date|Time)?String\s*\(\s*\)/, "format.ts usa toLocale*String() sin opciones");
+  });
+  test("[EP00-TBR-004-CA2] the zone, the locale and the fixed month table are explicit", () => {
+    assert.ok(existsSync(file), "falta src/ui/format/format.ts");
+    const src = readFileSync(file, "utf8");
+    assert.match(src, /America\/Mexico_City/);
+    assert.match(src, /es-MX/);
+    for (const m of ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]) {
+      assert.match(src, new RegExp(`["'\`]${m}["'\`]`), `falta el mes «${m}» en la tabla fija`);
+    }
+    assert.doesNotMatch(src, /["'`]sept["'`]/, "la tabla de meses no usa «sept» (AJ-5)");
+  });
+});
+
+describe("[EP00-TBR-004-CA3] focus, motion and ellipsis rules of the pieces (static, jsdom cannot evaluate them)", () => {
+  const FOCUS_SCOPE = /focus-visible|focus-within/;
+  const FOCUS_COLOR = /outline-focus|ring-focus|var\(\s*--color-focus\s*\)/;
+  const FOCUS_OFFSET = /outline-offset-2|outline-offset\s*:\s*2px|ring-offset-2/;
+  const OWN_RING = ["button", "filter-select", "tabs", "data-table"];
+  for (const piece of OWN_RING) {
+    test(`[EP00-TBR-004-CA3] ${piece} draws the 2 px focus ring with the focus token`, () => {
+      const text = readAll(pieceSources(piece));
+      assert.notEqual(text, "", `faltan las fuentes de ${piece}`);
+      assert.match(text, FOCUS_SCOPE, `${piece} no declara un estilo de foco visible`);
+      assert.match(text, FOCUS_COLOR, `${piece} no usa el token focus para el anillo`);
+      assert.match(text, FOCUS_OFFSET, `${piece} no separa el anillo 2 px`);
+    });
+  }
+  for (const piece of ["banner", "empty-state"]) {
+    test(`[EP00-TBR-004-CA3] ${piece} actions get the focus ring (own rule or TbButton)`, () => {
+      const text = readAll(pieceSources(piece));
+      assert.notEqual(text, "", `faltan las fuentes de ${piece}`);
+      const delegated = /\btb-button\b/.test(text);
+      const own = FOCUS_SCOPE.test(text) && FOCUS_COLOR.test(text);
+      assert.ok(delegated || own, `${piece}: sus botones no llevan el anillo de foco`);
+    });
+  }
+  test("[EP00-TBR-004-CA3] skeleton stops its shimmer with reduced motion", () => {
+    const text = readAll(pieceSources("skeleton"));
+    assert.notEqual(text, "", "faltan las fuentes de skeleton");
+    assert.match(text, /motion-reduce:animate-none|prefers-reduced-motion\s*:\s*reduce/, "Skeleton no respeta «reducir movimiento»");
+  });
+  for (const piece of ["data-table", "filter-select"]) {
+    test(`[EP00-TBR-004-CA3] ${piece} cuts long text with an ellipsis`, () => {
+      const text = readAll(pieceSources(piece));
+      assert.notEqual(text, "", `faltan las fuentes de ${piece}`);
+      assert.match(text, /text-overflow\s*:\s*ellipsis|\btruncate\b|\btext-ellipsis\b/, `${piece} no corta con elipsis`);
+    });
+  }
+});
+
+describe("[EP00-TBR-004-CA3] contrast pairs used by the pieces are checked by build-tokens (AJ-4, D-038)", () => {
+  // Text/background pairs of the design §4, by piece. Color names without the color- prefix, like tokens.json.
+  const INVENTORY = {
+    banner: [
+      ["ink", "accent-soft"], ["ink", "corr-soft"], ["ink", "bad-soft"], ["ink", "ok-soft"],
+      ["ink-2", "accent-soft"], ["ink-2", "corr-soft"], ["ink-2", "bad-soft"], ["ink-2", "ok-soft"],
+    ],
+    "status-badge": [["surface", "bad"], ["ink-2", "surface-selected"], ["on-accent", "accent"], ["ink-2", "surface"]],
+    "data-table": [["ink-2", "surface-hover"], ["ink-2", "surface-selected"], ["ink-muted", "surface-hover"], ["ink-muted", "surface-selected"]],
+    "focus ring": [["focus", "bg"], ["focus", "surface"], ["focus", "surface-hover"]],
+  };
+  const tokens = JSON.parse(readFileSync(join(UI, "tokens", "tokens.json"), "utf8"));
+  const listed = new Set((tokens.contrast?.pairs ?? []).map(([fg, bg]) => `${fg}|${bg}`));
+  for (const [piece, pairs] of Object.entries(INVENTORY)) {
+    test(`[EP00-TBR-004-CA3] ${piece}: its pairs are in tokens.json contrast.pairs`, () => {
+      for (const [fg, bg] of pairs) assert.ok(TOKEN_NAMES.has(`--color-${fg}`) && TOKEN_NAMES.has(`--color-${bg}`), `${fg} o ${bg} no es un color de tokens.json`);
+      const missing = pairs.filter(([fg, bg]) => !listed.has(`${fg}|${bg}`)).map(([fg, bg]) => `${fg} sobre ${bg}`);
+      assert.deepEqual(missing, [], `pares sin comprobar en contrast.pairs: ${missing.join(", ")}`);
+    });
+  }
 });
