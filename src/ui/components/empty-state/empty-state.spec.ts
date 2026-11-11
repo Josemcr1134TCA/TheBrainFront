@@ -145,3 +145,131 @@ for (const theme of THEMES) {
     });
   });
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// [EP00-TBR-003-CA2] G3 secondary action (task T3, black box, before T4). Source: docs/ui/EP00-TBR-003/index.html, state
+// error-validation, and propuesta.md §3 (question 12): «Reintentar» (primary) and «Ir a la primera página» (tb-btn ghost)
+// in the same .acts row, the secondary after the primary.
+// API proposed for the T4 contract: input secondaryActionLabel (string | undefined), output secondaryAction (void).
+// The new output does not exist before T4: it is reached through outputOf() so this file keeps compiling and the 004
+// tests above keep running; the new tests fail at runtime for the missing API.
+// ---------------------------------------------------------------------------------------------------------------------
+interface OutputLike {
+  subscribe(fn: () => void): unknown;
+}
+
+function outputOf(component: unknown, name: string): OutputLike | undefined {
+  const candidate = (component as Record<string, unknown>)[name] as OutputLike | undefined;
+  return candidate && typeof candidate.subscribe === 'function' ? candidate : undefined;
+}
+
+const VALIDATION: Record<string, unknown> = {
+  variant: 'error',
+  heading: 'No pudimos pedir esa página',
+  message: 'Reintenta; si sigue igual, avisa al equipo técnico.',
+  secondaryActionLabel: 'Ir a la primera página',
+};
+
+function renderWithSecondary(inputs: Record<string, unknown> = {}) {
+  const fixture = TestBed.createComponent(TbEmptyState);
+  for (const [k, v] of Object.entries({ ...VALIDATION, ...inputs })) fixture.componentRef.setInput(k, v);
+  let primary = 0;
+  let secondary = 0;
+  fixture.componentInstance.action.subscribe(() => primary++);
+  const out = outputOf(fixture.componentInstance, 'secondaryAction');
+  out?.subscribe(() => secondary++);
+  fixture.detectChanges();
+  const el = fixture.nativeElement as HTMLElement;
+  return { fixture, el, out, primary: () => primary, secondary: () => secondary };
+}
+
+const labelsOf = (el: HTMLElement) => buttons(el).map((b) => b.textContent?.trim());
+const byLabel = (el: HTMLElement, text: string) => buttons(el).find((b) => b.textContent?.trim() === text);
+
+for (const theme of THEMES) {
+  describe(`[EP00-TBR-003-CA2] TbEmptyState secondary action G3 (data-theme="${theme}")`, () => {
+    beforeEach(() => document.documentElement.setAttribute('data-theme', theme));
+    afterEach(() => document.documentElement.removeAttribute('data-theme'));
+
+    it('[EP00-TBR-003-CA2] shows «Reintentar» and then «Ir a la primera página», in the same actions row', () => {
+      const { el } = renderWithSecondary();
+      expect(labelsOf(el)).toEqual(['Reintentar', 'Ir a la primera página']);
+      const [primary, secondary] = buttons(el);
+      expect(primary.parentElement).toBe(secondary.parentElement);
+      expect(primary.parentElement!.classList.contains('acts')).toBe(true);
+    });
+
+    it('[EP00-TBR-003-CA2] the secondary action is a ghost tb-btn of type="button"', () => {
+      const { el } = renderWithSecondary();
+      const secondary = byLabel(el, 'Ir a la primera página');
+      expect(secondary).toBeDefined();
+      expect(secondary!.classList.contains('tb-btn')).toBe(true);
+      expect(secondary!.classList.contains('ghost')).toBe(true);
+      expect(secondary!.classList.contains('primary')).toBe(false);
+      expect(secondary!.getAttribute('type')).toBe('button');
+    });
+
+    it('[EP00-TBR-003-CA2] the primary action keeps the same look as without a secondary action', () => {
+      const alone = buttons(render({ variant: 'error' }).el)[0];
+      const withSecondary = renderWithSecondary().el;
+      expect(byLabel(withSecondary, 'Ir a la primera página')).toBeDefined();
+      expect(byLabel(withSecondary, 'Reintentar')!.className).toBe(alone.className);
+    });
+
+    it('[EP00-TBR-003-CA2] the secondary click emits secondaryAction once and not action', () => {
+      const { el, out, primary, secondary, fixture } = renderWithSecondary();
+      expect(out).toBeDefined();
+      byLabel(el, 'Ir a la primera página')!.click();
+      fixture.detectChanges();
+      expect(secondary()).toBe(1);
+      expect(primary()).toBe(0);
+    });
+
+    it('[EP00-TBR-003-CA2] the primary click still emits action and not secondaryAction', () => {
+      const { el, primary, secondary, fixture } = renderWithSecondary();
+      expect(byLabel(el, 'Ir a la primera página')).toBeDefined();
+      byLabel(el, 'Reintentar')!.click();
+      fixture.detectChanges();
+      expect(primary()).toBe(1);
+      expect(secondary()).toBe(0);
+    });
+
+    it('[EP00-TBR-003-CA2] Tab order is primary then secondary', () => {
+      const { el } = renderWithSecondary();
+      expect(tabbables(el).map((b) => b.textContent?.trim())).toEqual(['Reintentar', 'Ir a la primera página']);
+    });
+
+    it('[EP00-TBR-003-CA2] focusActionOnShow focuses the primary, not the secondary', async () => {
+      const { el, fixture } = renderWithSecondary({ focusActionOnShow: true });
+      await fixture.whenStable();
+      fixture.detectChanges();
+      expect(byLabel(el, 'Ir a la primera página')).toBeDefined();
+      expect(document.activeElement).toBe(byLabel(el, 'Reintentar'));
+    });
+
+    it('[EP00-TBR-003-CA2] keeps a single live role (alert) with two actions', () => {
+      const { el } = renderWithSecondary();
+      expect(buttons(el)).toHaveLength(2);
+      const roles = [el, ...Array.from(el.querySelectorAll<HTMLElement>('[role]'))]
+        .map((n) => n.getAttribute('role'))
+        .filter((r) => r === 'alert' || r === 'status');
+      expect(roles).toEqual(['alert']);
+    });
+
+    it('[EP00-TBR-003-CA2] an explicit actionLabel and a secondary action live together', () => {
+      const { el } = renderWithSecondary({ actionLabel: 'Volver a cargar' });
+      expect(labelsOf(el)).toEqual(['Volver a cargar', 'Ir a la primera página']);
+    });
+
+    it('[EP00-TBR-003-CA2] without secondaryActionLabel there is a single action, as in 004', () => {
+      expect(labelsOf(render({ variant: 'error' }).el)).toEqual(['Reintentar']);
+      expect(buttons(render({ variant: 'empty' }).el)).toHaveLength(0);
+    });
+
+    it('[EP00-TBR-003-CA2] renders no hand-written color with two actions', () => {
+      const { el } = renderWithSecondary();
+      expect(buttons(el)).toHaveLength(2);
+      expect(el.outerHTML).not.toMatch(/#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(/i);
+    });
+  });
+}

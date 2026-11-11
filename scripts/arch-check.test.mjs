@@ -4,6 +4,9 @@
 // http-only-in-data, ui-independent, no-cycles, hub-only-via-api and no-backend-in-front.
 // [EP00-TBR-004-CA1] DA-3 adds ui-public-api: every file under src/ outside src/ui/ imports src/ui/ only through
 // src/ui/index.ts or src/ui/tokens/ (widened by the tech lead on 2026-11-11; DEC-0017 amendment: 15 forbidden rules in total).
+// [EP00-TBR-003-CA4] Adds views-no-adapter: pages/ and components/ of any module only know the port; they do not import
+// a concrete adapter (data/*.adapter.ts), a fixture (data/*.fixture.ts), a data providers file (data/*.providers.ts)
+// or the data switches (core/data/data-mode.ts, core/data/in-memory-failure.ts). 16 forbidden rules in total (AJ-1).
 // [EP00-TBR-014-CA6] The module list of .dependency-cruiser.cjs must match the table fixed in this file (MODULES).
 // If it does not, this file fails, so `arch:check` fails in its test step and says which name is extra and which is missing.
 // Fixtures are written at runtime under tmp/ (ignored by git) and removed afterwards.
@@ -33,8 +36,9 @@ const MODULES = ["catalog", "replenishment", "purchasing", "inventory", "commerc
 const BOUNDARY_PREFIX = "boundary-";
 // [EP00-TBR-014-CA3] The 7 rule names of the story (boundary-<module> counts once as a family): 8 + 6 = 14 forbidden rules.
 // [EP00-TBR-004-CA1] Plus ui-public-api (DA-3, DEC-0017 amendment): 8 + 7 = 15 forbidden rules.
-const OTHER_RULES = ["module-layers", "http-only-in-data", "ui-independent", "no-cycles", "hub-only-via-api", "no-backend-in-front", "ui-public-api"];
-const EXPECTED_RULE_COUNT = 15;
+// [EP00-TBR-003-CA4] Plus views-no-adapter (design EP00-TBR-003 §8.4, AJ-1): 8 + 8 = 16 forbidden rules.
+const OTHER_RULES = ["module-layers", "http-only-in-data", "ui-independent", "no-cycles", "hub-only-via-api", "no-backend-in-front", "ui-public-api", "views-no-adapter"];
+const EXPECTED_RULE_COUNT = 16;
 const EXPECTED_RULES = [...MODULES.map((m) => `${BOUNDARY_PREFIX}${m}`), ...OTHER_RULES];
 // Test data only: the rule and module names used before DEC-0013. None of them may remain in the config.
 const LEGACY_PREFIX = "frontera-";
@@ -207,6 +211,73 @@ const CASES = [
     from: "src/main.ts",
     to: "src/ui/index.ts.internal.ts",
   },
+  // [EP00-TBR-003-CA4] views-no-adapter: a view (pages/ or components/) imports something that is not the port.
+  {
+    tag: "[EP00-TBR-003-CA4]",
+    title: "fails on views-no-adapter when pages/ imports a concrete adapter from data/",
+    rule: "views-no-adapter",
+    files: {
+      "src/app/catalog/data/x.adapter.ts": "export class XAdapter {}\n",
+      "src/app/catalog/pages/p.ts": "import { XAdapter } from '../data/x.adapter';\nexport const p = XAdapter;\n",
+    },
+    from: "src/app/catalog/pages/p.ts",
+    to: "src/app/catalog/data/x.adapter.ts",
+  },
+  {
+    tag: "[EP00-TBR-003-CA4]",
+    title: "fails on views-no-adapter when components/ imports a fixture from data/",
+    rule: "views-no-adapter",
+    files: {
+      "src/app/inventory/data/x.fixture.ts": "export const X_FIXTURE = [] as const;\n",
+      "src/app/inventory/components/c.ts": "import { X_FIXTURE } from '../data/x.fixture';\nexport const c = X_FIXTURE;\n",
+    },
+    from: "src/app/inventory/components/c.ts",
+    to: "src/app/inventory/data/x.fixture.ts",
+  },
+  {
+    tag: "[EP00-TBR-003-CA4]",
+    title: "fails on views-no-adapter when pages/ imports the data providers of its module",
+    rule: "views-no-adapter",
+    files: {
+      "src/app/catalog/data/x.providers.ts": "export const provideX = () => [];\n",
+      "src/app/catalog/pages/p.ts": "import { provideX } from '../data/x.providers';\nexport const p = provideX;\n",
+    },
+    from: "src/app/catalog/pages/p.ts",
+    to: "src/app/catalog/data/x.providers.ts",
+  },
+  {
+    tag: "[EP00-TBR-003-CA4]",
+    title: "fails on views-no-adapter when pages/ imports the data-mode switch from core/data/",
+    rule: "views-no-adapter",
+    files: {
+      "src/app/core/data/data-mode.ts": "export const provideDataMode = (mode: string) => mode;\n",
+      "src/app/catalog/pages/p.ts": "import { provideDataMode } from '../../core/data/data-mode';\nexport const p = provideDataMode;\n",
+    },
+    from: "src/app/catalog/pages/p.ts",
+    to: "src/app/core/data/data-mode.ts",
+  },
+  {
+    tag: "[EP00-TBR-003-CA4]",
+    title: "fails on views-no-adapter when components/ imports the in-memory failure switch from core/data/",
+    rule: "views-no-adapter",
+    files: {
+      "src/app/core/data/in-memory-failure.ts": "export const IN_MEMORY_FAILURE = 'failure';\n",
+      "src/app/purchasing/components/c.ts": "import { IN_MEMORY_FAILURE } from '../../core/data/in-memory-failure';\nexport const c = IN_MEMORY_FAILURE;\n",
+    },
+    from: "src/app/purchasing/components/c.ts",
+    to: "src/app/core/data/in-memory-failure.ts",
+  },
+  {
+    tag: "[EP00-TBR-003-CA4]",
+    title: "fails on views-no-adapter when a nested component imports the in-memory adapter of its module",
+    rule: "views-no-adapter",
+    files: {
+      "src/app/catalog/data/in-memory-product.adapter.ts": "export class InMemoryProductAdapter {}\n",
+      "src/app/catalog/components/row/row.ts": "import { InMemoryProductAdapter } from '../../data/in-memory-product.adapter';\nexport const row = InMemoryProductAdapter;\n",
+    },
+    from: "src/app/catalog/components/row/row.ts",
+    to: "src/app/catalog/data/in-memory-product.adapter.ts",
+  },
   {
     title: "fails on no-cycles when two files import each other",
     rule: "no-cycles",
@@ -340,7 +411,7 @@ describe("[EP00-TBR-004-CA1] widened ui-public-api: allowed imports (negative co
   }
 });
 
-test("[EP00-TBR-001-CA2][EP00-TBR-014-CA3] every forbidden rule in .dependency-cruiser.cjs has a test case (coverage)", () => {
+test("[EP00-TBR-001-CA2][EP00-TBR-014-CA3][EP00-TBR-003-CA4] every forbidden rule in .dependency-cruiser.cjs has a test case (coverage)", () => {
   const configured = config.forbidden.map((r) => r.name);
   const covered = new Set(CASES.map((c) => c.rule));
   const missing = configured.filter((name) => !covered.has(name));
@@ -349,9 +420,11 @@ test("[EP00-TBR-001-CA2][EP00-TBR-014-CA3] every forbidden rule in .dependency-c
   assert.deepEqual(stale, [], `casos de reglas que ya no existen: ${stale.join(", ")}`);
   // Two variants for module-layers (EP00-TBR-001 design, §8.3).
   assert.equal(CASES.filter((c) => c.rule === "module-layers").length, 2);
+  // [EP00-TBR-003-CA4] views-no-adapter: adapter, fixture, providers and both core/data switches (design EP00-TBR-003 §8.5).
+  assert.ok(CASES.filter((c) => c.rule === "views-no-adapter").length >= 5, "faltan variantes de views-no-adapter");
 });
 
-test("[EP00-TBR-014-CA3][EP00-TBR-004-CA1] the config has exactly the 15 forbidden rules, all with their English names", () => {
+test("[EP00-TBR-014-CA3][EP00-TBR-004-CA1][EP00-TBR-003-CA4] the config has exactly the 16 forbidden rules, all with their English names", () => {
   const configured = config.forbidden.map((r) => r.name);
   const repeated = configured.filter((name, i) => configured.indexOf(name) !== i);
   assert.deepEqual(repeated, [], `reglas repetidas en .dependency-cruiser.cjs: ${repeated.join(", ")}`);
@@ -382,6 +455,77 @@ test("[EP00-TBR-004-CA1] ui-public-api covers all of src/ except src/ui/ and onl
     assert.ok(matches(rule.to, p), `${p} es interno y debe quedar prohibido`);
   for (const p of ["src/ui/index.ts", "src/ui/tokens/tokens.json", "src/ui/tokens/theme.ts"])
     assert.ok(!matches(rule.to, p), `${p} debe quedar permitido`);
+});
+
+// [EP00-TBR-003-CA4] What views-no-adapter still allows: views know the port and the model; index.ts and the app root wire the data.
+describe("[EP00-TBR-003-CA4] views-no-adapter: allowed imports (negative controls)", { concurrency: CONCURRENCY }, () => {
+  const CONTROLS = [
+    {
+      title: "pages/ and components/ import the port (data/*.port.ts), model/ and the shared contract of core/data/",
+      files: {
+        "src/app/core/data/paged-list.port.ts": "export abstract class PagedListPort<T> { abstract list(): T[]; }\n",
+        "src/app/core/data/page.ts": "export interface Page<T> { readonly items: readonly T[]; readonly nextCursor: string | null; }\n",
+        "src/app/core/data/api-error.ts":
+          "export class ApiError extends Error {}\nexport const isApiError = (v: unknown): v is ApiError => v instanceof ApiError;\n",
+        "src/app/catalog/model/product.ts": "export interface Product { readonly code: string; }\n",
+        "src/app/catalog/data/product.port.ts":
+          "import { PagedListPort } from '../../core/data/paged-list.port';\nimport { Product } from '../model/product';\nexport abstract class ProductPort extends PagedListPort<Product> {}\n",
+        "src/app/catalog/components/row.ts":
+          "import { Product } from '../model/product';\nimport { ProductPort } from '../data/product.port';\nexport const row = (p: Product) => [p.code, ProductPort];\n",
+        "src/app/catalog/pages/list.ts":
+          "import { ProductPort } from '../data/product.port';\nimport { Product } from '../model/product';\nimport { Page } from '../../core/data/page';\nimport { isApiError } from '../../core/data/api-error';\nimport { row } from '../components/row';\nexport const list = (p: Page<Product>) => [ProductPort, p, isApiError, row];\n",
+      },
+    },
+    {
+      title: "index.ts imports data/*.providers.ts (which wires the adapter, the fixture and the switches) and app.config.ts imports the data-mode switch",
+      files: {
+        "src/app/core/data/in-memory-failure.ts": "export const IN_MEMORY_FAILURE = 'failure';\n",
+        "src/app/core/data/data-mode.ts":
+          "export const provideDataMode = (mode: string) => mode;\nexport const providePort = (port: unknown, adapters: unknown) => [port, adapters];\n",
+        "src/app/catalog/model/product.ts": "export interface Product { readonly code: string; }\n",
+        "src/app/catalog/data/product.port.ts": "export abstract class ProductPort {}\n",
+        "src/app/catalog/data/products.fixture.ts": "import { Product } from '../model/product';\nexport const PRODUCTS_FIXTURE: Product[] = [];\n",
+        "src/app/catalog/data/in-memory-product.adapter.ts":
+          "import { ProductPort } from './product.port';\nimport { PRODUCTS_FIXTURE } from './products.fixture';\nimport { IN_MEMORY_FAILURE } from '../../core/data/in-memory-failure';\nexport class InMemoryProductAdapter extends ProductPort { seed = [PRODUCTS_FIXTURE, IN_MEMORY_FAILURE]; }\n",
+        "src/app/catalog/data/catalog-data.providers.ts":
+          "import { providePort } from '../../core/data/data-mode';\nimport { ProductPort } from './product.port';\nimport { InMemoryProductAdapter } from './in-memory-product.adapter';\nexport const provideCatalogData = () => providePort(ProductPort, { memory: InMemoryProductAdapter });\n",
+        "src/app/catalog/index.ts":
+          "import { provideCatalogData } from './data/catalog-data.providers';\nexport const routes = [{ path: '', providers: [provideCatalogData()] }];\n",
+        "src/app/app.routes.ts": "export const routes = [{ path: 'catalogo', loadChildren: () => import('./catalog').then((m) => m.routes) }];\n",
+        "src/app/app.config.ts": "import { provideDataMode } from './core/data/data-mode';\nexport const appConfig = { providers: [provideDataMode('memory')] };\n",
+      },
+    },
+  ];
+  for (const c of CONTROLS) {
+    it(`[EP00-TBR-003-CA4] passes (exit 0) when ${c.title}`, { timeout: TEST_TIMEOUT_MS }, async () => {
+      const result = await cruise(makeFixture(c.files));
+      assert.equal(result.status, 0, `esta importación debe estar permitida (${c.title}):\n${result.stdout}${result.stderr}`);
+    });
+  }
+});
+
+// [EP00-TBR-003-CA4] The rule watches the views of every module and blocks exactly the adapter-side files (design §8.4
+// convention: *.adapter.ts, *.fixture.ts and *.providers.ts directly in data/, plus core/data/data-mode.ts and core/data/in-memory-failure.ts).
+test("[EP00-TBR-003-CA4] views-no-adapter watches pages/ and components/ of every module and blocks only adapter-side files", () => {
+  const rule = config.forbidden.find((r) => r.name === "views-no-adapter");
+  assert.ok(rule, "falta la regla views-no-adapter en .dependency-cruiser.cjs (EP00-TBR-003-CA4)");
+  assert.equal(rule.severity, "error");
+  assert.equal(typeof rule.comment, "string");
+  assert.notEqual(rule.comment.trim(), "", "la regla debe explicar en comment por qué falla");
+  const matches = (side, path) => new RegExp(side.path).test(path) && !(side.pathNot && new RegExp(side.pathNot).test(path));
+  for (const m of MODULES)
+    for (const p of [`src/app/${m}/pages/list.page.ts`, `src/app/${m}/components/row/row.ts`])
+      assert.ok(matches(rule.from, p), `la regla debe vigilar las importaciones que salen de ${p}`);
+  for (const p of ["src/app/catalog/data/catalog-data.providers.ts", "src/app/catalog/model/product.ts", "src/app/catalog/index.ts",
+    "src/app/app.config.ts", "src/app/app.routes.ts", "src/app/core/data/data-mode.ts", "src/ui/components/data-table/data-table.ts"])
+    assert.ok(!matches(rule.from, p), `la regla no debe vigilar lo que sale de ${p} (no es una vista)`);
+  for (const p of ["src/app/catalog/data/in-memory-product.adapter.ts", "src/app/purchasing/data/remote-order.adapter.ts",
+    "src/app/catalog/data/products.fixture.ts", "src/app/catalog/data/catalog-data.providers.ts",
+    "src/app/core/data/data-mode.ts", "src/app/core/data/in-memory-failure.ts"])
+    assert.ok(matches(rule.to, p), `${p} es del lado del adaptador y debe quedar prohibido para las vistas`);
+  for (const p of ["src/app/catalog/data/product.port.ts", "src/app/catalog/data/product.mapper.ts", "src/app/catalog/model/product.ts",
+    "src/app/core/data/page.ts", "src/app/core/data/api-error.ts", "src/app/core/data/paged-list.port.ts", "src/app/catalog/index.ts", "src/ui/index.ts"])
+    assert.ok(!matches(rule.to, p), `${p} debe quedar permitido para las vistas`);
 });
 
 // [EP00-TBR-014-CA6] Pure comparison between the module list of the config and the fixed table.

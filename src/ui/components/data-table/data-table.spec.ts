@@ -938,3 +938,274 @@ describe('[EP00-TBR-004-CA1] design system public API (src/ui/index.ts)', () => 
     expect(names.filter((n) => /icon|loadingphase|chip|search/i.test(n))).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------------
+// [EP00-TBR-003-CA2][EP00-TBR-003-CA3] Extensions G1 to G3 for the Catálogo screen (task T3, black box, before T4).
+// Sources: docs/ui/EP00-TBR-003/index.html (states normal, pagina-2, ultima-pagina, cargando, vacio, error-validation)
+// and propuesta.md §3 to §5; plan G1 to G4 in docs/estado/EP00-TBR-003.md.
+// API proposed for the T4 contract:
+//   G1 input searchable (boolean, default true). With false there is no .tb-filterbar, .tb-find nor search box, and
+//      searchLabel is not needed. Angular has no conditionally required input, so the assumption is that searchLabel
+//      becomes optional (input<string | undefined>) and the 004 callers keep passing it.
+//   G2 content projection with the selector [tbFooter], inside the table footer. Without it the footer is the 004 one.
+//      The approved UI has no list footer in loading, empty or error states, so the projected content follows the footer.
+//   G3 TbTableText gains an optional secondaryActionLabel; the table forwards it to its EmptyState and emits
+//      secondaryAction with the variant (TbEmptyVariant). Without it everything stays as in 004.
+// The new members do not exist before T4. They are reached through setInput and outputOf() so that this file keeps
+// compiling and the 004 tests above keep running; the new tests fail at runtime for the missing API.
+// ---------------------------------------------------------------------------------------------------------------------
+interface OutputLike<T> {
+  subscribe(fn: (value: T) => void): unknown;
+}
+
+function outputOf<T>(component: unknown, name: string): OutputLike<T> | undefined {
+  const candidate = (component as Record<string, unknown>)[name] as OutputLike<T> | undefined;
+  return candidate && typeof candidate.subscribe === 'function' ? candidate : undefined;
+}
+
+const filterBar = (el: HTMLElement) => el.querySelector('.tb-filterbar');
+const findBox = (el: HTMLElement) => el.querySelector('.tb-find');
+
+describe('[EP00-TBR-003-CA3] G1 TbDataTable without search box (searchable)', () => {
+  it('[EP00-TBR-003-CA3] by default the filter bar and the search box are there, as in 004', () => {
+    const { el } = render({ rows: makeRows(2) });
+    expect(filterBar(el)).not.toBeNull();
+    expect(findBox(el)).not.toBeNull();
+    expect(searchBox(el)).not.toBeNull();
+  });
+
+  it('[EP00-TBR-003-CA3] searchable=true behaves like the default', () => {
+    const { el } = render({ rows: makeRows(2), searchable: true });
+    expect(filterBar(el)).not.toBeNull();
+    expect(findBox(el)).not.toBeNull();
+    expect(searchBox(el)!.getAttribute('placeholder')).toBe('Buscar por nombre');
+  });
+
+  it('[EP00-TBR-003-CA3] searchable=false paints no filter bar, no search box and no text input', () => {
+    const { el } = render({ rows: makeRows(2), searchable: false });
+    expect(filterBar(el)).toBeNull();
+    expect(findBox(el)).toBeNull();
+    expect(el.querySelectorAll('input')).toHaveLength(0);
+  });
+
+  it('[EP00-TBR-003-CA3] searchable=false keeps the header, the rows and the footer', () => {
+    const { el } = render({ rows: makeRows(20), searchable: false });
+    expect(el.querySelector('.tb-sec h2')?.textContent?.trim()).toBe('Productos');
+    expect(el.querySelector('[role="table"]')).not.toBeNull();
+    expect(dataRows(el)).toHaveLength(20);
+    expect(footerText(el)).toContain('20 productos');
+  });
+
+  it('[EP00-TBR-003-CA3] searchable=false hides «Limpiar filtros» of the bar even with filtersActive', () => {
+    const { el } = render({ rows: makeRows(2), searchable: false, filtersActive: true });
+    expect(buttonByText(el, 'Limpiar filtros')).toBeUndefined();
+  });
+
+  it('[EP00-TBR-003-CA3] searchable=false: the first tabbable is a sortable header, not a search box', () => {
+    const { el } = render({ rows: makeRows(2), searchable: false, rowsActivatable: true });
+    expect(tabbables(el)[0]).toBe(headerControl(header(el, 'Precio')));
+  });
+
+  it('[EP00-TBR-003-CA3] searchable=false does not need searchLabel (assumption: searchLabel becomes optional)', () => {
+    const fixture = TestBed.createComponent(TbDataTable);
+    const inputs: Record<string, unknown> = { ...DEFAULTS, rows: makeRows(2), searchable: false };
+    delete inputs['searchLabel'];
+    delete inputs['searchPlaceholder'];
+    expect(() => {
+      for (const [k, v] of Object.entries(inputs)) fixture.componentRef.setInput(k, v);
+      fixture.detectChanges();
+    }).not.toThrow();
+    const el = fixture.nativeElement as HTMLElement;
+    expect(dataRows(el)).toHaveLength(2);
+    expect(findBox(el)).toBeNull();
+  });
+
+  it('[EP00-TBR-003-CA3] searchable can be switched at runtime', () => {
+    const { el, set } = render({ rows: makeRows(2), searchable: false });
+    expect(findBox(el)).toBeNull();
+    set({ searchable: true });
+    expect(searchBox(el)).not.toBeNull();
+  });
+
+  it('[EP00-TBR-003-CA2] searchable=false keeps the error EmptyState with role="alert" and «Reintentar»', () => {
+    const { el, out, sync } = render({ state: 'error', rows: [], searchable: false });
+    const es = emptyState(el);
+    expect(es).not.toBeNull();
+    expect(roleOf(es!)).toBe('alert');
+    buttonByText(es!, 'Reintentar')!.click();
+    sync();
+    expect(out.retry).toBe(1);
+    expect(filterBar(el)).toBeNull();
+  });
+});
+
+@Component({
+  selector: 'tb-data-table-footer-host',
+  imports: [TbDataTable],
+  template: `
+    <tb-data-table
+      title="Productos"
+      [columns]="columns"
+      [rows]="rows"
+      [rowKey]="rowKey"
+      [state]="state"
+      searchLabel="Buscar productos"
+      [itemLabel]="itemLabel"
+      loadingLabel="Cargando productos"
+      [texts]="texts"
+    >
+      <div tbFooter id="caller-footer"><button type="button" id="caller-next">Siguiente</button></div>
+    </tb-data-table>
+  `,
+})
+class FooterHost {
+  columns = COLUMNS;
+  rows: Row[] = makeRows(20);
+  rowKey = (r: Row) => r.id;
+  state: 'loading' | 'ready' | 'error' | 'offline' | 'forbidden' = 'ready';
+  itemLabel = { one: 'producto', other: 'productos' };
+  texts = TEXTS;
+}
+
+function renderFooterHost(patch: Partial<Pick<FooterHost, 'rows' | 'state'>> = {}) {
+  const fixture = TestBed.createComponent(FooterHost);
+  Object.assign(fixture.componentInstance, patch);
+  fixture.detectChanges();
+  return { fixture, el: fixture.nativeElement as HTMLElement };
+}
+
+describe('[EP00-TBR-003-CA3] G2 TbDataTable footer with projected content ([tbFooter])', () => {
+  it('[EP00-TBR-003-CA3] the [tbFooter] content is rendered inside the table footer', () => {
+    const { el } = renderFooterHost();
+    const own = el.querySelector('#caller-footer') as HTMLElement | null;
+    expect(own).not.toBeNull();
+    const foot = own!.closest('footer');
+    expect(foot).not.toBeNull();
+    expect(foot!.closest('tb-data-table')).not.toBeNull();
+  });
+
+  it('[EP00-TBR-003-CA3] the [tbFooter] content is not in the card header nor in the tools slot', () => {
+    const { el } = renderFooterHost();
+    const own = el.querySelector('#caller-footer') as HTMLElement | null;
+    expect(own).not.toBeNull();
+    expect(own!.closest('.tb-sec')).toBeNull();
+    expect(own!.closest('.tools')).toBeNull();
+  });
+
+  it('[EP00-TBR-003-CA3] the projected footer buttons are reachable with Tab after the sortable headers', () => {
+    const { el } = renderFooterHost();
+    const order = tabbables(el);
+    const next = el.querySelector('#caller-next') as HTMLElement | null;
+    expect(next).not.toBeNull();
+    expect(order).toContain(next);
+    expect(order.indexOf(headerControl(header(el, 'Precio')))).toBeLessThan(order.indexOf(next!));
+  });
+
+  for (const state of ['error', 'offline', 'forbidden'] as const) {
+    it(`[EP00-TBR-003-CA2] state ${state} shows no [tbFooter] content (approved UI: error states have no list footer)`, () => {
+      const { el } = renderFooterHost({ state, rows: [] });
+      expect(emptyState(el)).not.toBeNull();
+      expect(el.querySelector('#caller-footer')).toBeNull();
+    });
+  }
+
+  it('[EP00-TBR-003-CA3] ready with zero rows (empty state) shows no [tbFooter] content (approved UI, «vacio»)', () => {
+    const { el } = renderFooterHost({ rows: [] });
+    expect(emptyState(el)).not.toBeNull();
+    expect(el.querySelector('#caller-footer')).toBeNull();
+  });
+
+  it('[EP00-TBR-003-CA3] without projected content the footer is the 004 one: count and note, no buttons', () => {
+    const { el } = render({ rows: makeRows(41), note: 'Precios sin impuestos' });
+    const foot = el.querySelector('footer') as HTMLElement | null;
+    expect(foot).not.toBeNull();
+    const t = (foot!.textContent ?? '').replace(/\s+/g, ' ').trim();
+    expect(t).toContain('41 productos');
+    expect(t).toContain('Precios sin impuestos');
+    expect(foot!.querySelectorAll('button')).toHaveLength(0);
+  });
+});
+
+describe('[EP00-TBR-003-CA3] G2 TbDataTable footer while loading (fake timers)', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('[EP00-TBR-003-CA3] with the skeleton on screen there is no [tbFooter] content (approved UI, «cargando»)', () => {
+    const { el, fixture } = renderFooterHost({ state: 'loading', rows: [] });
+    vi.advanceTimersByTime(300);
+    fixture.detectChanges();
+    expect(skeleton(el)).not.toBeNull();
+    expect(el.querySelector('#caller-footer')).toBeNull();
+  });
+});
+
+// Texts of the VALIDATION error of the approved UI (propuesta.md §3, question 12).
+const VALIDATION_TEXTS = {
+  ...TEXTS,
+  error: {
+    heading: 'No pudimos pedir esa página',
+    message: 'Reintenta; si sigue igual, avisa al equipo técnico.',
+    secondaryActionLabel: 'Ir a la primera página',
+  },
+};
+
+const emptyLabels = (el: HTMLElement) =>
+  Array.from(emptyState(el)?.querySelectorAll('button') ?? []).map((b) => b.textContent?.trim());
+
+describe('[EP00-TBR-003-CA2] G3 TbDataTable secondary action in the error state', () => {
+  it('[EP00-TBR-003-CA2] error with secondaryActionLabel shows «Reintentar» and then «Ir a la primera página» (ghost)', () => {
+    const { el } = render({ state: 'error', rows: [], texts: VALIDATION_TEXTS });
+    const es = emptyState(el)!;
+    expect(roleOf(es)).toBe('alert');
+    expect(es.textContent).toContain('No pudimos pedir esa página');
+    expect(emptyLabels(el)).toEqual(['Reintentar', 'Ir a la primera página']);
+    expect(buttonByText(es, 'Ir a la primera página')!.classList.contains('ghost')).toBe(true);
+    expect(buttonByText(es, 'Reintentar')!.classList.contains('ghost')).toBe(false);
+  });
+
+  it('[EP00-TBR-003-CA2] the secondary action emits secondaryAction("error") and not retry', () => {
+    const { fixture, el, out, sync } = render({ state: 'error', rows: [], texts: VALIDATION_TEXTS });
+    const secondary = outputOf<unknown>(fixture.componentInstance, 'secondaryAction');
+    expect(secondary).toBeDefined();
+    const seen: unknown[] = [];
+    secondary!.subscribe((v) => seen.push(v));
+    const button = buttonByText(emptyState(el)!, 'Ir a la primera página');
+    expect(button).toBeDefined();
+    button!.click();
+    sync();
+    expect(seen).toEqual(['error']);
+    expect(out.retry).toBe(0);
+  });
+
+  it('[EP00-TBR-003-CA2] with a secondary action, «Reintentar» still emits retry only', () => {
+    const { fixture, el, out, sync } = render({ state: 'error', rows: [], texts: VALIDATION_TEXTS });
+    const seen: unknown[] = [];
+    outputOf<unknown>(fixture.componentInstance, 'secondaryAction')?.subscribe((v) => seen.push(v));
+    expect(buttonByText(emptyState(el)!, 'Ir a la primera página')).toBeDefined();
+    buttonByText(emptyState(el)!, 'Reintentar')!.click();
+    sync();
+    expect(out.retry).toBe(1);
+    expect(seen).toEqual([]);
+  });
+
+  it('[EP00-TBR-003-CA2] without secondaryActionLabel the error state has only «Reintentar», as in 004', () => {
+    const { el } = render({ state: 'error', rows: [] });
+    expect(emptyLabels(el)).toEqual(['Reintentar']);
+  });
+
+  it('[EP00-TBR-003-CA2] INVALID_CURSOR: the error action label is replaced by «Ir a la primera página», a single action', () => {
+    const texts = {
+      ...TEXTS,
+      error: {
+        heading: 'Esa página ya no está disponible',
+        message: 'Vuelve a la primera página.',
+        actionLabel: 'Ir a la primera página',
+      },
+    };
+    const { el, out, sync } = render({ state: 'error', rows: [], texts });
+    expect(emptyLabels(el)).toEqual(['Ir a la primera página']);
+    buttonByText(emptyState(el)!, 'Ir a la primera página')!.click();
+    sync();
+    expect(out.retry).toBe(1);
+  });
+});
