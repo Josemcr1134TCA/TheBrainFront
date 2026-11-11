@@ -408,3 +408,237 @@ for (const theme of THEMES) {
     });
   });
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// [EP00-TBR-003-CA2] T4 contract, round 3 (option a approved by the dev, 2026-11-11; kit v6 referencia.html,
+// approved UI docs/ui/EP00-TBR-003/index.html, states error, error-not-found and sin-permisos):
+//   G5. actionLabel accepts null = no action: no button and no .acts row, not even in error or offline (which have a
+//       default action). undefined keeps the 004 default action. The role does not change.
+//   G6. message accepts a text or a list of texts; each item goes in its own <p>, in order. A new input
+//       reference?: string paints a last <p> «Referencia: » with the id inside a .tb-num element (mono), as in the
+//       prototype. Without reference there is no such paragraph; with a text message everything stays as in 004.
+// The new inputs are reached through setInput so this file keeps compiling before T4.
+// ---------------------------------------------------------------------------------------------------------------------
+const paragraphs = (el: HTMLElement) =>
+  Array.from(el.querySelectorAll('p')).map((p) => (p.textContent ?? '').replace(/\s+/g, ' ').trim());
+
+function ownRules(): { selectors: string[]; decls: Map<string, string> }[] {
+  const styles = (TbEmptyState as unknown as Record<string, { styles?: readonly string[] }>)['ɵcmp']?.styles ?? [];
+  const css = styles.join('\n').replace(/\/\*[\s\S]*?\*\//g, '');
+  const rules: { selectors: string[]; decls: Map<string, string> }[] = [];
+  const re = /([^{}@]+)\{([^{}]*)\}/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(css))) {
+    const decls = new Map<string, string>();
+    for (const decl of m[2].split(';')) {
+      const at = decl.indexOf(':');
+      if (at > 0) decls.set(decl.slice(0, at).trim().toLowerCase(), decl.slice(at + 1).trim());
+    }
+    rules.push({ selectors: m[1].split(',').map((s) => s.trim()), decls });
+  }
+  return rules;
+}
+
+// Declared value of a property for an element in the component styles (the last matching rule wins; enough here).
+function declaredIn(el: Element, prop: string): string | null {
+  let value: string | null = null;
+  for (const rule of ownRules()) {
+    const v = rule.decls.get(prop);
+    if (v === undefined) continue;
+    const hit = rule.selectors.some((s) => {
+      try {
+        return el.matches(s);
+      } catch {
+        return false;
+      }
+    });
+    if (hit) value = v;
+  }
+  return value === null ? null : value.replace(/%ns%/gi, '').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+const labels = (el: HTMLElement) => buttons(el).map((b) => b.textContent?.trim());
+
+for (const theme of THEMES) {
+  describe(`[EP00-TBR-003-CA2] G5 TbEmptyState without action, actionLabel null (data-theme="${theme}")`, () => {
+    beforeEach(() => document.documentElement.setAttribute('data-theme', theme));
+    afterEach(() => document.documentElement.removeAttribute('data-theme'));
+
+    for (const variant of Object.keys(TEXTS)) {
+      it(`[EP00-TBR-003-CA2] ${variant} with actionLabel null paints no button and no .acts row`, () => {
+        const { el } = render({ variant, actionLabel: null });
+        expect(buttons(el)).toHaveLength(0);
+        expect(el.querySelector('.acts')).toBeNull();
+        expect(tabbables(el)).toHaveLength(0);
+      });
+    }
+
+    it('[EP00-TBR-003-CA2] error with actionLabel null keeps role="alert", heading and message (approved UI, NOT_FOUND)', () => {
+      const { el } = render({ variant: 'error', actionLabel: null });
+      expect(buttons(el)).toHaveLength(0);
+      expect(roleOf(el)).toBe('alert');
+      expect(el.classList.contains('err')).toBe(true);
+      expect(el.querySelector('b')?.textContent?.trim()).toBe(TEXTS['error'][0]);
+      expect(paragraphs(el)).toEqual([TEXTS['error'][1]]);
+    });
+
+    it('[EP00-TBR-003-CA2] offline with actionLabel null keeps role="alert"', () => {
+      const { el } = render({ variant: 'offline', actionLabel: null });
+      expect(buttons(el)).toHaveLength(0);
+      expect(roleOf(el)).toBe('alert');
+    });
+
+    it('[EP00-TBR-003-CA2] forbidden with actionLabel null keeps role="status" (approved UI, sin-permisos)', () => {
+      const { el } = render({ variant: 'forbidden', actionLabel: null });
+      expect(buttons(el)).toHaveLength(0);
+      expect(roleOf(el)).toBe('status');
+    });
+
+    it('[EP00-TBR-003-CA2] actionLabel undefined keeps the 004 default action', () => {
+      expect(labels(render({ variant: 'error', actionLabel: undefined }).el)).toEqual(['Reintentar']);
+      expect(labels(render({ variant: 'offline', actionLabel: undefined }).el)).toEqual(['Reintentar']);
+      expect(labels(render({ variant: 'no-results', actionLabel: undefined }).el)).toEqual(['Limpiar filtros']);
+    });
+
+    it('[EP00-TBR-003-CA2] actionLabel null also hides the secondary action', () => {
+      const { el } = renderWithSecondary({ actionLabel: null });
+      expect(buttons(el)).toHaveLength(0);
+      expect(el.querySelector('.acts')).toBeNull();
+    });
+
+    it('[EP00-TBR-003-CA2] actionLabel null with focusActionOnShow moves no focus', async () => {
+      const before = document.activeElement;
+      const { el, fixture } = render({ variant: 'error', actionLabel: null, focusActionOnShow: true });
+      await fixture.whenStable();
+      fixture.detectChanges();
+      expect(buttons(el)).toHaveLength(0);
+      expect(document.activeElement).toBe(before);
+    });
+
+    it('[EP00-TBR-003-CA2] actionLabel can be switched at runtime: undefined, null, undefined', () => {
+      const { el, fixture } = render({ variant: 'error' });
+      expect(buttons(el)).toHaveLength(1);
+      fixture.componentRef.setInput('actionLabel', null);
+      fixture.detectChanges();
+      expect(buttons(el)).toHaveLength(0);
+      expect(el.querySelector('.acts')).toBeNull();
+      fixture.componentRef.setInput('actionLabel', undefined);
+      fixture.detectChanges();
+      expect(labels(el)).toEqual(['Reintentar']);
+    });
+  });
+
+  describe(`[EP00-TBR-003-CA2] G6 TbEmptyState with several paragraphs and a reference (data-theme="${theme}")`, () => {
+    beforeEach(() => document.documentElement.setAttribute('data-theme', theme));
+    afterEach(() => document.documentElement.removeAttribute('data-theme'));
+
+    const UNAVAILABLE = ['El servicio no está disponible por ahora.', 'Reintenta; si sigue igual, avisa al equipo técnico.'];
+
+    it('[EP00-TBR-003-CA2] a list message paints one <p> per item, in order', () => {
+      const { el } = render({ variant: 'error', message: UNAVAILABLE });
+      expect(paragraphs(el)).toEqual(UNAVAILABLE);
+    });
+
+    it('[EP00-TBR-003-CA2] the paragraphs are children of the empty state, between the heading and the actions', () => {
+      const { el } = render({ variant: 'error', message: UNAVAILABLE });
+      const kids = Array.from(el.children)
+        .filter((c) => !c.classList.contains('ico'))
+        .map((c) => c.tagName.toLowerCase() + (c.classList.contains('acts') ? '.acts' : ''));
+      expect(kids).toEqual(['b', 'p', 'p', 'div.acts']);
+    });
+
+    it('[EP00-TBR-003-CA2] a one-item list paints a single <p>', () => {
+      const { el } = render({ variant: 'error', message: ['Solo un párrafo.'] });
+      expect(paragraphs(el)).toEqual(['Solo un párrafo.']);
+    });
+
+    it('[EP00-TBR-003-CA2] a text message stays a single <p> without reference, as in 004', () => {
+      const { el } = render({ variant: 'error' });
+      expect(el.querySelectorAll('p')).toHaveLength(1);
+      expect(paragraphs(el)).toEqual([TEXTS['error'][1]]);
+      expect(el.querySelector('.tb-num')).toBeNull();
+    });
+
+    it('[EP00-TBR-003-CA2] reference paints a last <p> «Referencia: <id>» with the id in a .tb-num element (approved UI)', () => {
+      const { el } = render({ variant: 'error', message: UNAVAILABLE, reference: 'c-demo-0001' });
+      expect(paragraphs(el)).toEqual([...UNAVAILABLE, 'Referencia: c-demo-0001']);
+      const ps = Array.from(el.querySelectorAll('p'));
+      const num = ps[ps.length - 1].querySelector('.tb-num');
+      expect(num).not.toBeNull();
+      expect(num!.textContent?.trim()).toBe('c-demo-0001');
+      expect(el.querySelectorAll('.tb-num')).toHaveLength(1);
+    });
+
+    it('[EP00-TBR-003-CA2] the reference paragraph goes before the actions row', () => {
+      const { el } = render({ variant: 'error', message: UNAVAILABLE, reference: 'c-demo-0001', actionVariant: 'primary' });
+      const kids = Array.from(el.children);
+      const refIndex = kids.findIndex((k) => k.tagName === 'P' && !!k.querySelector('.tb-num'));
+      const actsIndex = kids.findIndex((k) => k.classList.contains('acts'));
+      expect(refIndex).toBeGreaterThan(-1);
+      expect(actsIndex).toBeGreaterThan(refIndex);
+      expect(labels(el)).toEqual(['Reintentar']);
+    });
+
+    it('[EP00-TBR-003-CA2] reference with a text message: the message <p> then the reference <p>', () => {
+      const { el } = render({ variant: 'forbidden', reference: 'c-demo-0004' });
+      expect(paragraphs(el)).toEqual([TEXTS['forbidden'][1], 'Referencia: c-demo-0004']);
+      expect(roleOf(el)).toBe('status');
+    });
+
+    it('[EP00-TBR-003-CA2] several paragraphs, reference and no action (approved UI, NOT_FOUND)', () => {
+      const { el } = render({
+        variant: 'error',
+        heading: 'No encontramos el catálogo',
+        message: ['No existe el recurso pedido.', 'Vuelve a abrirlo desde el menú.'],
+        reference: 'c-demo-0003',
+        actionLabel: null,
+      });
+      expect(roleOf(el)).toBe('alert');
+      expect(paragraphs(el)).toEqual([
+        'No existe el recurso pedido.',
+        'Vuelve a abrirlo desde el menú.',
+        'Referencia: c-demo-0003',
+      ]);
+      expect(buttons(el)).toHaveLength(0);
+      expect(el.querySelector('.acts')).toBeNull();
+    });
+
+    it('[EP00-TBR-003-CA2] an empty or missing reference paints no reference paragraph', () => {
+      for (const reference of [undefined, '']) {
+        const { el } = render({ variant: 'error', message: UNAVAILABLE, reference });
+        expect(paragraphs(el)).toEqual(UNAVAILABLE);
+        expect(el.querySelector('.tb-num')).toBeNull();
+      }
+    });
+
+    it('[EP00-TBR-003-CA2] the reference can be set and removed at runtime', () => {
+      const { el, fixture } = render({ variant: 'error' });
+      fixture.componentRef.setInput('reference', 'c-demo-0001');
+      fixture.detectChanges();
+      expect(paragraphs(el)).toEqual([TEXTS['error'][1], 'Referencia: c-demo-0001']);
+      fixture.componentRef.setInput('reference', undefined);
+      fixture.detectChanges();
+      expect(paragraphs(el)).toEqual([TEXTS['error'][1]]);
+    });
+
+    it('[EP00-TBR-003-CA2] the .tb-num of the reference declares the kit mono font with tabular figures', () => {
+      const { el } = render({ variant: 'error', reference: 'c-demo-0001' });
+      const num = el.querySelector('.tb-num');
+      expect(num).not.toBeNull();
+      expect(declaredIn(num!, 'font-family')).toBe('var(--font-mono)');
+      expect(declaredIn(num!, 'font-variant-numeric')).toBe('tabular-nums');
+    });
+
+    it('[EP00-TBR-003-CA2] the reference is shown as text, never as markup', () => {
+      const { el } = render({ variant: 'error', reference: '<b>c-demo-0002</b>' });
+      expect(el.querySelector('.tb-num')?.textContent).toBe('<b>c-demo-0002</b>');
+      expect(el.querySelector('.tb-num b')).toBeNull();
+    });
+
+    it('[EP00-TBR-003-CA2] renders no hand-written color with paragraphs and reference', () => {
+      const { el } = render({ variant: 'error', message: UNAVAILABLE, reference: 'c-demo-0001' });
+      expect(el.querySelector('.tb-num')).not.toBeNull();
+      expect(el.outerHTML).not.toMatch(/#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(/i);
+    });
+  });
+}

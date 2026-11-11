@@ -1361,3 +1361,304 @@ describe('[EP00-TBR-003-CA3] G2 TbDataTable single count in the footer (hallazgo
     expect(flat(el.querySelector('footer'))).toBe('20 productos');
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------------
+// [EP00-TBR-003-CA2][EP00-TBR-003-CA3] T4 contract, round 3 (option a approved by the dev, 2026-11-11; kit v6
+// referencia.html «Tablas», approved UI docs/ui/EP00-TBR-003/index.html):
+//   G5. TbTableText.actionLabel: null is forwarded to the EmptyState: no action, not even in error or offline.
+//   G6. TbTableText.message is a text or a list of texts (one <p> each) and TbTableText.reference?: string paints the
+//       last <p> «Referencia: <id>» with the id in .tb-num.
+//   G7. stickyColumns: 0 | 1 | 2 (0 by default). 1 puts the kit class stick1 on .tb-hscroll; 2 puts stick1 and stick2.
+//       With 2, the inline custom property --stick2 of .tb-hscroll is the first column track plus the column gap,
+//       as the kit computes it (tpl[0] + columnGap); the gap of .tb-row is var(--spacing-3) = 12px, so a 104px track
+//       gives 116px (the prototype value) and a 56px track gives 68px (the kit sample). If the first track is not in
+//       px there is no inline --stick2 and the kit fallback var(--stick2, 68px) applies.
+//   G8. density: 'default' | 'dense' ('default' by default, rows of var(--size-row) = 56px). 'dense' puts the kit class
+//       dense on .tb-list (rows of 44px, padding 6px).
+//   Without any of the new inputs the DOM is the 004 one (and rounds 1 and 2).
+// New inputs and text fields are reached through setInput, untyped, so this file keeps compiling before T4.
+// ---------------------------------------------------------------------------------------------------------------------
+const SPACING_3_PX = 12;
+const hscroll = (el: HTMLElement) => el.querySelector('.tb-hscroll') as HTMLElement | null;
+const list = (el: HTMLElement) => el.querySelector('.tb-list') as HTMLElement | null;
+const headRow = (el: HTMLElement) => el.querySelector('.tb-head-row') as HTMLElement;
+const firstRow = (el: HTMLElement) => dataRows(el)[0];
+const withFirstTrack = (track: string | undefined): TbColumn<Row>[] =>
+  COLUMNS.map((c, i) => (i === 0 ? { ...c, track } : { ...c, track: c.track ?? '120px' }));
+
+// --stick2 as px: accepts a px length or calc(<px> + var(--spacing-3)), the two forms of «track plus column gap».
+function stick2Px(host: HTMLElement | null): number | null {
+  const raw = normalize(host?.style.getPropertyValue('--stick2') ?? '');
+  if (!raw) return null;
+  const px = raw.match(/^(\d+(?:\.\d+)?)px$/);
+  if (px) return Number(px[1]);
+  const sum = raw.match(/^calc\((\d+(?:\.\d+)?)px \+ var\(--spacing-3\)\)$/);
+  if (sum) return Number(sum[1]) + SPACING_3_PX;
+  return Number.NaN;
+}
+
+describe('[EP00-TBR-003-CA3] G7 TbDataTable fixed columns (stickyColumns)', () => {
+  it('[EP00-TBR-003-CA3] without stickyColumns .tb-hscroll has no stick class nor --stick2, as in 004', () => {
+    const { el } = render({ rows: makeRows(3), columns: withFirstTrack('104px') });
+    expect(Array.from(hscroll(el)!.classList)).toEqual(['tb-hscroll']);
+    expect(hscroll(el)!.style.getPropertyValue('--stick2')).toBe('');
+  });
+
+  it('[EP00-TBR-003-CA3] stickyColumns 0 is the same as no stickyColumns', () => {
+    const { el } = render({ rows: makeRows(3), columns: withFirstTrack('104px'), stickyColumns: 0 });
+    expect(Array.from(hscroll(el)!.classList)).toEqual(['tb-hscroll']);
+    expect(hscroll(el)!.style.getPropertyValue('--stick2')).toBe('');
+  });
+
+  it('[EP00-TBR-003-CA3] stickyColumns 1 puts stick1 on .tb-hscroll and not stick2', () => {
+    const { el } = render({ rows: makeRows(3), columns: withFirstTrack('104px'), stickyColumns: 1 });
+    expect(hscroll(el)!.classList.contains('stick1')).toBe(true);
+    expect(hscroll(el)!.classList.contains('stick2')).toBe(false);
+  });
+
+  it('[EP00-TBR-003-CA3] stickyColumns 2 puts stick1 and stick2 on .tb-hscroll (approved UI)', () => {
+    const { el } = render({ rows: makeRows(3), columns: withFirstTrack('104px'), stickyColumns: 2 });
+    expect(hscroll(el)!.classList.contains('stick1')).toBe(true);
+    expect(hscroll(el)!.classList.contains('stick2')).toBe(true);
+  });
+
+  it('[EP00-TBR-003-CA3] stickyColumns 2 with a 104px first track sets --stick2 to 116px (prototype value)', () => {
+    const { el } = render({ rows: makeRows(3), columns: withFirstTrack('104px'), stickyColumns: 2 });
+    expect(stick2Px(hscroll(el))).toBe(116);
+  });
+
+  it('[EP00-TBR-003-CA3] stickyColumns 2 with a 56px first track sets --stick2 to 68px (kit sample)', () => {
+    const { el } = render({ rows: makeRows(3), columns: withFirstTrack('56px'), stickyColumns: 2 });
+    expect(stick2Px(hscroll(el))).toBe(68);
+  });
+
+  it('[EP00-TBR-003-CA3] stickyColumns 2 with a first track not in px sets no --stick2 (kit fallback 68px)', () => {
+    for (const track of [undefined, 'minmax(190px,1.3fr)']) {
+      const { el } = render({ rows: makeRows(3), columns: withFirstTrack(track), stickyColumns: 2 });
+      expect(hscroll(el)!.classList.contains('stick2')).toBe(true);
+      expect(hscroll(el)!.style.getPropertyValue('--stick2')).toBe('');
+    }
+  });
+
+  it('[EP00-TBR-003-CA3] stick1 makes the first header and row cells sticky at left 0 on the surface', () => {
+    const { el } = render({ rows: makeRows(3), columns: withFirstTrack('104px'), stickyColumns: 1 });
+    const rules = componentRules(TbIcon, TbDataTable);
+    for (const cell of [headRow(el).children[0], firstRow(el).children[0]]) {
+      expect(declared(cell, 'position', rules)).toBe('sticky');
+      expect(declared(cell, 'left', rules)).toBe('0');
+      expect(declared(cell, 'z-index', rules)).toBe('2');
+      expect(declared(cell, 'background', rules)).toBe('var(--color-surface)');
+      expect(declared(cell, 'box-shadow', rules)).toBe('1px 0 0 var(--color-line)');
+    }
+    expect(declared(firstRow(el).children[1], 'position', rules)).not.toBe('sticky');
+  });
+
+  it('[EP00-TBR-003-CA3] stick2 makes the second cells sticky at var(--stick2, 68px) with the divider on the second', () => {
+    const { el } = render({ rows: makeRows(3), columns: withFirstTrack('104px'), stickyColumns: 2 });
+    const rules = componentRules(TbIcon, TbDataTable);
+    for (const row of [headRow(el), firstRow(el)]) {
+      const [first, second] = [row.children[0], row.children[1]];
+      expect(declared(first, 'position', rules)).toBe('sticky');
+      expect(declared(first, 'left', rules)).toBe('0');
+      expect(declared(first, 'box-shadow', rules)).toBeNull();
+      expect(declared(second, 'position', rules)).toBe('sticky');
+      expect(declared(second, 'left', rules)).toBe('var(--stick2, 68px)');
+      expect(declared(second, 'z-index', rules)).toBe('2');
+      expect(declared(second, 'background', rules)).toBe('var(--color-surface)');
+      expect(declared(second, 'box-shadow', rules)).toBe('1px 0 0 var(--color-line)');
+    }
+    expect(declared(firstRow(el).children[2], 'position', rules)).not.toBe('sticky');
+  });
+
+  it('[EP00-TBR-003-CA3] without stickyColumns no cell is sticky, as in 004', () => {
+    const { el } = render({ rows: makeRows(3), columns: withFirstTrack('104px') });
+    const rules = componentRules(TbIcon, TbDataTable);
+    for (const cell of [headRow(el).children[0], firstRow(el).children[0], firstRow(el).children[1]]) {
+      expect(declared(cell, 'position', rules)).not.toBe('sticky');
+    }
+  });
+
+  it('[EP00-TBR-003-CA3] stickyColumns can be switched at runtime: 2, 0', () => {
+    const { el, set } = render({ rows: makeRows(3), columns: withFirstTrack('104px'), stickyColumns: 2 });
+    expect(stick2Px(hscroll(el))).toBe(116);
+    set({ stickyColumns: 0 });
+    expect(Array.from(hscroll(el)!.classList)).toEqual(['tb-hscroll']);
+    expect(hscroll(el)!.style.getPropertyValue('--stick2')).toBe('');
+  });
+
+  it('[EP00-TBR-003-CA3] stickyColumns does not change roles, row count nor cell texts', () => {
+    const plain = render({ rows: makeRows(3), columns: withFirstTrack('104px') }).el;
+    const fixed = render({ rows: makeRows(3), columns: withFirstTrack('104px'), stickyColumns: 2 }).el;
+    expect(hscroll(fixed)!.classList.contains('stick2')).toBe(true);
+    expect(dataRows(fixed)).toHaveLength(3);
+    expect(headers(fixed).map((h) => h.textContent?.trim())).toEqual(headers(plain).map((h) => h.textContent?.trim()));
+    expect(dataRows(fixed).map((r) => flat(r))).toEqual(dataRows(plain).map((r) => flat(r)));
+  });
+});
+
+describe('[EP00-TBR-003-CA3] G8 TbDataTable compact rows (density)', () => {
+  it('[EP00-TBR-003-CA3] without density .tb-list has no dense class and rows of var(--size-row), as in 004', () => {
+    const { el } = render({ rows: makeRows(3) });
+    const rules = componentRules(TbIcon, TbDataTable);
+    expect(list(el)!.classList.contains('dense')).toBe(false);
+    expect(declared(firstRow(el), 'min-height', rules)).toBe('var(--size-row)');
+    expect(declared(firstRow(el), 'padding-top', rules)).toBe('10px');
+  });
+
+  it('[EP00-TBR-003-CA3] density "default" is the same as no density', () => {
+    const { el } = render({ rows: makeRows(3), density: 'default' });
+    const rules = componentRules(TbIcon, TbDataTable);
+    expect(list(el)!.classList.contains('dense')).toBe(false);
+    expect(declared(firstRow(el), 'min-height', rules)).toBe('var(--size-row)');
+  });
+
+  it('[EP00-TBR-003-CA3] density "dense" puts the kit class dense on .tb-list (approved UI)', () => {
+    const { el } = render({ rows: makeRows(3), density: 'dense' });
+    expect(list(el)!.classList.contains('dense')).toBe(true);
+    expect(list(el)!.getAttribute('role')).toBe('table');
+  });
+
+  it('[EP00-TBR-003-CA3] dense rows declare the kit 44px min-height and 6px vertical padding', () => {
+    const { el } = render({ rows: makeRows(3), density: 'dense' });
+    const rules = componentRules(TbIcon, TbDataTable);
+    for (const row of dataRows(el)) {
+      expect(declared(row, 'min-height', rules)).toBe('44px');
+      expect(declared(row, 'padding-top', rules)).toBe('6px');
+      expect(declared(row, 'padding-bottom', rules)).toBe('6px');
+    }
+  });
+
+  it('[EP00-TBR-003-CA3] density can be switched at runtime: dense, default', () => {
+    const { el, set } = render({ rows: makeRows(3), density: 'dense' });
+    expect(list(el)!.classList.contains('dense')).toBe(true);
+    set({ density: 'default' });
+    expect(list(el)!.classList.contains('dense')).toBe(false);
+  });
+
+  it('[EP00-TBR-003-CA3] dense and stickyColumns 2 together, as in the approved UI', () => {
+    const { el } = render({ rows: makeRows(3), columns: withFirstTrack('104px'), stickyColumns: 2, density: 'dense' });
+    expect(hscroll(el)!.classList.contains('stick1')).toBe(true);
+    expect(hscroll(el)!.classList.contains('stick2')).toBe(true);
+    expect(stick2Px(hscroll(el))).toBe(116);
+    expect(list(el)!.classList.contains('dense')).toBe(true);
+    expect(dataRows(el)).toHaveLength(3);
+  });
+});
+
+describe('[EP00-TBR-003-CA3] round 3 compatibility: without the new inputs the DOM is the 004 one', () => {
+  it('[EP00-TBR-003-CA3] stickyColumns 0 and density "default" give the same DOM as no new input', () => {
+    const plain = render({ rows: makeRows(3), columns: withFirstTrack('104px') }).el;
+    const explicit = render({ rows: makeRows(3), columns: withFirstTrack('104px'), stickyColumns: 0, density: 'default' }).el;
+    expect(explicit.innerHTML).toBe(plain.innerHTML);
+  });
+
+  it('[EP00-TBR-003-CA3] .tb-hscroll and .tb-list keep exactly their 004 classes', () => {
+    const { el } = render({ rows: makeRows(3) });
+    expect(Array.from(hscroll(el)!.classList)).toEqual(['tb-hscroll']);
+    expect(Array.from(list(el)!.classList)).toEqual(['tb-list']);
+  });
+});
+
+const NOT_FOUND_TEXTS = {
+  ...TEXTS,
+  error: {
+    heading: 'No encontramos el catálogo',
+    message: ['No existe el recurso pedido.', 'Vuelve a abrirlo desde el menú.'],
+    reference: 'c-demo-0003',
+    actionLabel: null,
+  },
+};
+const emptyParagraphs = (el: HTMLElement) =>
+  Array.from(emptyState(el)?.querySelectorAll('p') ?? []).map((p) => flat(p));
+
+describe('[EP00-TBR-003-CA2] G5 TbDataTable forwards actionLabel null to its EmptyState', () => {
+  it('[EP00-TBR-003-CA2] error with actionLabel null shows the EmptyState with role="alert" and no button', () => {
+    const texts = { ...TEXTS, error: { ...TEXTS.error, actionLabel: null } };
+    const { el } = render({ state: 'error', rows: [], texts });
+    const es = emptyState(el)!;
+    expect(es).not.toBeNull();
+    expect(roleOf(es)).toBe('alert');
+    expect(es.textContent).toContain(TEXTS.error.heading);
+    expect(emptyLabels(el)).toEqual([]);
+    expect(es.querySelector('.acts')).toBeNull();
+  });
+
+  it('[EP00-TBR-003-CA2] offline with actionLabel null shows no button', () => {
+    const texts = { ...TEXTS, offline: { ...TEXTS.offline, actionLabel: null } };
+    const { el } = render({ state: 'offline', rows: [], texts });
+    expect(emptyState(el)).not.toBeNull();
+    expect(emptyLabels(el)).toEqual([]);
+  });
+
+  it('[EP00-TBR-003-CA2] actionLabel null with secondaryActionLabel shows no button either', () => {
+    const texts = { ...TEXTS, error: { ...VALIDATION_TEXTS.error, actionLabel: null } };
+    const { el } = render({ state: 'error', rows: [], texts });
+    expect(emptyState(el)).not.toBeNull();
+    expect(emptyLabels(el)).toEqual([]);
+  });
+
+  it('[EP00-TBR-003-CA2] without actionLabel the error keeps «Reintentar», as in 004', () => {
+    const { el } = render({ state: 'error', rows: [] });
+    expect(emptyLabels(el)).toEqual(['Reintentar']);
+  });
+});
+
+describe('[EP00-TBR-003-CA2] G6 TbDataTable forwards several paragraphs and the reference', () => {
+  it('[EP00-TBR-003-CA2] NOT_FOUND of the approved UI: two paragraphs, «Referencia: c-demo-0003» and no action', () => {
+    const { el } = render({ state: 'error', rows: [], texts: NOT_FOUND_TEXTS });
+    expect(roleOf(emptyState(el)!)).toBe('alert');
+    expect(emptyParagraphs(el)).toEqual([
+      'No existe el recurso pedido.',
+      'Vuelve a abrirlo desde el menú.',
+      'Referencia: c-demo-0003',
+    ]);
+    expect(emptyState(el)!.querySelector('p:last-of-type .tb-num')?.textContent?.trim()).toBe('c-demo-0003');
+    expect(emptyLabels(el)).toEqual([]);
+  });
+
+  it('[EP00-TBR-003-CA2] UNAVAILABLE of the approved UI: two paragraphs, reference and «Reintentar» primary', () => {
+    const texts = {
+      ...TEXTS,
+      error: {
+        heading: 'No pudimos cargar el catálogo',
+        message: ['El servicio no está disponible por ahora.', 'Reintenta; si sigue igual, avisa al equipo técnico.'],
+        reference: 'c-demo-0001',
+        actionVariant: 'primary',
+      },
+    };
+    const { el, out, sync } = render({ state: 'error', rows: [], texts });
+    expect(emptyParagraphs(el)).toEqual([
+      'El servicio no está disponible por ahora.',
+      'Reintenta; si sigue igual, avisa al equipo técnico.',
+      'Referencia: c-demo-0001',
+    ]);
+    expect(lookOf(buttonByText(emptyState(el)!, 'Reintentar'))).toEqual(PRIMARY_LOOK);
+    buttonByText(emptyState(el)!, 'Reintentar')!.click();
+    sync();
+    expect(out.retry).toBe(1);
+  });
+
+  it('[EP00-TBR-003-CA2] forbidden with a reference keeps role="status" (approved UI, sin-permisos)', () => {
+    const texts = {
+      ...TEXTS,
+      forbidden: {
+        heading: 'Tu perfil no puede ver el catálogo',
+        message: ['No tienes permiso para esta consulta.', 'Pide acceso a quien administra tu perfil.'],
+        reference: 'c-demo-0004',
+      },
+    };
+    const { el } = render({ state: 'forbidden', rows: [], texts });
+    expect(roleOf(emptyState(el)!)).toBe('status');
+    expect(emptyParagraphs(el)).toEqual([
+      'No tienes permiso para esta consulta.',
+      'Pide acceso a quien administra tu perfil.',
+      'Referencia: c-demo-0004',
+    ]);
+  });
+
+  it('[EP00-TBR-003-CA2] a text message without reference stays a single paragraph, as in 004', () => {
+    const { el } = render({ state: 'error', rows: [] });
+    expect(emptyParagraphs(el)).toEqual([TEXTS.error.message]);
+    expect(emptyState(el)!.querySelector('.tb-num')).toBeNull();
+  });
+});
