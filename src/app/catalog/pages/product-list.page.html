@@ -1,0 +1,44 @@
+<div class="p-5">
+  <h1 class="text-display text-ink">Catálogo</h1>
+  <div class="mt-4">
+    <tb-data-table
+      title="Productos"
+      [searchable]="false"
+      [columns]="columns"
+      [rows]="items()"
+      [rowKey]="rowKey"
+      [state]="state()"
+      [itemLabel]="itemLabel"
+      [count]="items().length"
+      loadingLabel="Cargando productos"
+      [texts]="texts()"
+      (retry)="onRetry()"
+      (secondaryAction)="first()"
+    >
+      <ng-template tbCell="ean" let-row>
+        @if (row.ean) {
+          {{ row.ean }}
+        } @else {
+          <span aria-hidden="true">—</span><span class="tb-sr">Sin EAN</span>
+        }
+      </ng-template>
+      <ng-template tbCell="supplier" let-row>
+        @if (row.supplier) {
+          {{ row.supplier.name }}
+        } @else {
+          <span aria-hidden="true">—</span><span class="tb-sr">Sin proveedor</span>
+        }
+      </ng-template>
+      <tb-cursor-pager
+        tbFooter
+        [page]="pageNumber()"
+        [hasNext]="hasNext()"
+        [count]="items().length"
+        [itemLabel]="itemLabel"
+        (first)="first()"
+        (previous)="previous()"
+        (next)="next()"
+      />
+    </tb-data-table>
+  </div>
+</div>
