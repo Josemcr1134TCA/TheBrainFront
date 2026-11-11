@@ -160,7 +160,7 @@ Salida: `selectedChange`. Con una selección inválida toma la primera y lo emit
 Salidas: `sortChange`, `searchChange` (en cada tecla, sin *debounce*), `clearFilters`, `retry`, `loadTimeout`, `rowActivate` y `emptyAction`. Los `FilterSelect` se proyectan dentro de la tabla y las acciones de la cabecera llevan el atributo `tbActions`.
 
 Reglas de presentación:
-- Un valor nulo, indefinido o vacío se muestra como «—». El texto largo se corta con elipsis y queda completo en el DOM.
+- Un valor nulo, indefinido o vacío se muestra como «—». También una fecha que no es texto o un estado fuera de la lista. `type` y `badge.tone` son uniones cerradas (`TbColumnType`, `TbBadgeTone`): un valor distinto no compila. El texto largo se corta con elipsis y queda completo en el DOM.
 - Carga: `aria-busy` desde el primer instante; antes de 300 ms conserva lo que había; después aparece el esqueleto en lugar de todo (nunca mezclado con filas viejas); a los 10 s pasa a error con «Reintentar» y emite `loadTimeout` una vez. Si los datos llegan después, se muestran.
 - Sin filas: `no-results` si hay filtros o búsqueda; si no, `empty`. `error` y `offline` usan `role="alert"`; `empty`, `no-results` y `forbidden`, `role="status"`.
 - La acción de un estado emite `retry` (`error` y `offline`), `clearFilters` (`no-results`) o `emptyAction` con la variante (`empty` y `forbidden`).

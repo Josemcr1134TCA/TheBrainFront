@@ -19,8 +19,7 @@ export interface TbTab {
   readonly label: string;
   /** Count shown in mono next to the label, formatted with formatQuantity. */
   readonly count?: number;
-  // Any other text falls back to accent; the union keeps the autocomplete of the real tones.
-  readonly badge?: { readonly count: number; readonly tone: TbBadgeTone | (string & {}) };
+  readonly badge?: { readonly count: number; readonly tone: TbBadgeTone };
 }
 
 let nextInstance = 0;
@@ -63,7 +62,7 @@ let nextInstance = 0;
             <span class="n">{{ format(tab.count) }}</span>
           }
           @if (tab.badge; as badge) {
-            <tb-badge [count]="badge.count" [tone]="tone(badge.tone)" />
+            <tb-badge [count]="badge.count" [tone]="badge.tone" />
           }
         </button>
       }
@@ -120,10 +119,6 @@ export class TbTabs {
         });
       }
     });
-  }
-
-  protected tone(value: string): TbBadgeTone {
-    return value === 'mute' || value === 'bad' ? value : 'accent';
   }
 
   protected tabId(id: string): string {

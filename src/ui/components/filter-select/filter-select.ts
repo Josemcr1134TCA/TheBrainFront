@@ -60,7 +60,6 @@ const fold = (text: string): string =>
     '(keydown.escape)': 'onEscape()',
     '(focusout)': 'onFocusOut($event)',
     '(document:pointerdown)': 'onOutside($event)',
-    '(document:mousedown)': 'onOutside($event)',
   },
   template: `
     <button
