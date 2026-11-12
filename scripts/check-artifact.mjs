@@ -26,19 +26,41 @@ const FINDING_ID = Object.freeze({
 const RESERVED_FINDING_IDS = new Set(Object.values(FINDING_ID));
 
 // Rule ids are compared ignoring case and leading or trailing whitespace (EP00-TBR-020, P1).
-// Returns null for a non-string, so it never throws and never matches anything.
-const normalizeRuleId = (id) => (typeof id === "string" ? id.trim().toLowerCase() : null);
+// Returns null for a non-string or a blank text, so it never throws and never matches anything
+// (a blank rule id may not be exempted by a blank exception, even when scanArtifact runs without validation).
+const normalizeRuleId = (id) => {
+  if (typeof id !== "string") return null;
+  const normalized = id.trim().toLowerCase();
+  return normalized === "" ? null : normalized;
+};
 
 // Errors whose message was written by this script and is safe to print as is (no code, no engine detail, no path outside the front).
 class PatternListError extends Error {
   name = "PatternListError";
 }
 
+// Never throws: `instanceof` can throw on a hostile thrown value (revoked Proxy), and then it is an unexpected error.
+const isPatternListError = (error) => {
+  try {
+    return error instanceof PatternListError;
+  } catch {
+    return false;
+  }
+};
+
 // Path of the list as shown to people: relative to the front, or only the file name when it lies outside of it.
+// Never throws, never returns an empty text and never shows an absolute path: a path that is not a text (URL, Buffer),
+// a calculation that throws or an empty result (for example "/") gives a fixed generic name.
+const GENERIC_LIST_PATH = "la ruta indicada";
 function shownListPath(path) {
-  const rel = relative(root, resolve(path)).split("\\").join("/");
-  if (rel && rel !== ".." && !rel.startsWith("../") && !isAbsolute(rel)) return rel;
-  return basename(path);
+  try {
+    if (typeof path !== "string") return GENERIC_LIST_PATH;
+    const rel = relative(root, resolve(path)).split("\\").join("/");
+    const shown = rel && rel !== ".." && !rel.startsWith("../") && !isAbsolute(rel) ? rel : basename(path);
+    return shown || GENERIC_LIST_PATH;
+  } catch {
+    return GENERIC_LIST_PATH;
+  }
 }
 
 const USAGE = "Uso: node scripts/check-artifact.mjs [--dir <ruta>]";
@@ -88,7 +110,7 @@ export function loadPatternList(path) {
   let text;
   try {
     text = readFileSync(path, "utf8");
-  } catch (error) {
+  } catch {
     throw new PatternListError(`No se pudo leer la lista de patrones prohibidos en ${shownListPath(path)}`);
   }
   try {
@@ -362,7 +384,7 @@ function main(argv) {
     if (errors.length) throw new PatternListError(`La lista de patrones prohibidos no es válida:\n${errors.map((e) => `  - ${e}`).join("\n")}`);
   } catch (error) {
     console.error(
-      error instanceof PatternListError
+      isPatternListError(error)
         ? error.message
         : `No se pudo cargar la lista de patrones prohibidos (${shownListPath(LIST_PATH)}): error inesperado (${errorType(error)}); la revisión falla y no se revisa nada`,
     );
