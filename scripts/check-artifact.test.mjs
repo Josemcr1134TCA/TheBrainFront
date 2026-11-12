@@ -2199,3 +2199,467 @@ describe("[EP00-TBR-019-CA3] round 1 · S20/Q19: an error whose name cannot be r
     assert.doesNotMatch(r.output, /0 hallazgos/, `la red final nunca da un resultado limpio\n${r.output.slice(0, 2_000)}`);
   });
 });
+
+// =============================================================================================
+// EP00-TBR-020 · T1, black box, written before the change from the criteria and design §8.6
+// (docs/diseno/EP00-TBR-020.md). The texts are the exact ones of design §8.3 and §8.4, approved by the dev (D-1).
+// [EP00-TBR-020-CA1] A list rule whose id is one of the script's own finding ids, ignoring case and leading or
+// trailing whitespace (JavaScript trim(), D-3), is rejected with a Spanish message that names the id as written; an
+// exception on one of those ids gets its own message (D-6). Exception ids are compared with the same normalization,
+// in the validator and in the scan (H-A).
+// [EP00-TBR-020-CA2] A list that cannot be read or is not valid JSON fails closed with a fixed Spanish text that names
+// the list by its path relative to the front (only the file name outside the front, D-4), with no error code, no
+// parser detail and no trace. Any other error while loading the list gives a fixed text with the error type (H8).
+// [EP00-TBR-020-CA3] The mandatory minimum does not change; a normalized guard is added next to the exact one (D-5).
+// [EP00-TBR-020-CA4] Two rule ids that only differ in case or in leading or trailing whitespace are rejected as
+// repeated, naming the repeated id as written and the first one.
+// The four reserved ids are a literal copy (D-2): the constant of the script is not imported on purpose.
+// The helpers that live inside other describe blocks (validList, copyWithList) are copied here, not moved.
+// Synthetic data only; fixtures under tmp/.
+// =============================================================================================
+import { tmpdir } from "node:os";
+import { relative as relativePath } from "node:path";
+
+const RESERVED_IDS = ["unreadable", "symlink", "unsupported-type", "scan-error"];
+const titleCase = (id) => id.split("-").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join("-");
+// Spellings of one id that must hit the reservation: exact, upper case, mixed case and whitespace at the edges.
+const RESERVED_VARIANTS = [
+  ["exact", (id) => id],
+  ["upper case", (id) => id.toUpperCase()],
+  ["mixed case", titleCase],
+  ["a leading space", (id) => ` ${id}`],
+  ["a trailing space", (id) => `${id} `],
+  ["spaces on both sides", (id) => ` ${id} `],
+  ["a leading tab", (id) => `\t${id}`],
+  ["a trailing tab", (id) => `${id}\t`],
+];
+// Ids that only look like a reserved one: the reservation does not reach substrings, "_" or inner spaces.
+const NOT_RESERVED = ["scan-error-x", "my-symlink", "unreadable2", "scan_error", "unsupported type"];
+
+// Exact Spanish texts of design §8.3 and §8.4 (D-1).
+const reservedRuleError = (group, index, id, reserved) =>
+  `${group}[${index}] (${id}): el id «${id}» está reservado para un hallazgo propio del script («${reserved}»); use otro id`;
+const repeatedRuleError = (group, index, id, first) =>
+  `${group}[${index}] (${id}): id repetido «${id}» (coincide con «${first}» sin contar mayúsculas ni espacios al inicio o al final)`;
+const reservedExceptionError = (index, rule, reserved) =>
+  `exceptions[${index}]: la regla «${rule}» es un id propio del script («${reserved}»); las excepciones solo eximen reglas de contenido de la lista`;
+const LIST_SHOWN = "scripts/forbidden-artifact-patterns.json";
+const unreadableListText = (shown) => `No se pudo leer la lista de patrones prohibidos en ${shown}`;
+const invalidJsonListText = (shown) => `La lista de patrones prohibidos no es un JSON válido (${shown})`;
+const unexpectedListText = (shown, type) => `No se pudo cargar la lista de patrones prohibidos (${shown}): error inesperado (${type}); la revisión falla y no se revisa nada`;
+// Header of the validation errors (check-artifact.mjs:327 on e76145a); it does not change here (EP00-TBR-021).
+const LIST_INVALID_HEADER = "La lista de patrones prohibidos no es válida:";
+const TECH_CODE_RE = /ENOENT|EACCES|EISDIR|ENOTDIR|EPERM/;
+const PARSER_DETAIL_RE = /SyntaxError|Unexpected|position|JSON at|line \d+ column/;
+const withoutFinalNewline = (s) => s.replace(/\r?\n$/, "");
+
+// Copy of validList and of its key pattern (they live inside the validatePatternList describe block above).
+const KEY_PATTERN_020 = () => `${DASHES}${"BEG" + "IN"} (?:[A-Z0-9]+ )*PRIV${"ATE"} KEY${DASHES}`;
+const validList020 = () => ({
+  version: 1,
+  names: [
+    { id: "vercel-config", kind: "file", name: "vercel.json", reason: "configuración de Vercel" },
+    { id: "vercel-dir", kind: "dir", name: ".vercel", reason: "carpeta de proyecto de Vercel" },
+  ],
+  contents: [
+    { id: "private-key-block", kind: "regex", pattern: KEY_PATTERN_020(), reason: "llave privada" },
+    { id: "service-role-jwt", kind: "jwt-role", role: "service_role", reason: "llave service_role de Supabase" },
+  ],
+  exceptions: [],
+});
+const exception020 = (fields) => ({ rule: "private-key-block", path: "browser/vendor-*.js", reason: "caso sintético", decision: "DEC-0000", ...fields });
+const syntheticNameRule = (id) => ({ id, kind: "file", name: "synthetic-020.txt", reason: "regla sintética de la prueba" });
+const syntheticContentRule = (id) => ({ id, kind: "regex", pattern: "synthetic-020-[0-9]{4}", reason: "regla sintética de la prueba" });
+const pushRule = (list, group, id) => {
+  list[group].push(group === "names" ? syntheticNameRule(id) : syntheticContentRule(id));
+  return list[group].length - 1;
+};
+
+// Copy of copyWithList (it lives inside the «fails closed» describe block above), extended for CA2: the list may be
+// missing, a folder or a file without read permission; extra files go into the dirty default dist; Node flags (a
+// preload) go before the script. It also returns the root of the copy, so a test can check it never shows.
+function copyWithList020(listText, { listAs = "file", extraFiles = {}, nodeArgs = [] } = {}) {
+  assert.ok(existsSync(SCRIPT), "no existe el script scripts/check-artifact.mjs");
+  const root = makeDir("list-");
+  mkdirSync(join(root, "scripts"));
+  copyFileSync(SCRIPT, join(root, "scripts", "check-artifact.mjs"));
+  const listPath = join(root, "scripts", "forbidden-artifact-patterns.json");
+  if (listAs === "dir") mkdirSync(listPath);
+  else if (listText !== undefined) writeFileSync(listPath, listText);
+  const dist = join(root, "dist", "the-brain-front");
+  for (const [path, content] of Object.entries({ ...CLEAN_FILES(), "browser/vercel.json": "{}\n", ...extraFiles })) {
+    mkdirSync(dirname(join(dist, path)), { recursive: true });
+    writeFileSync(join(dist, path), content);
+  }
+  if (listAs === "unreadable") chmodSync(listPath, 0o000);
+  try {
+    const r = spawnSync(process.execPath, [...nodeArgs, join(root, "scripts", "check-artifact.mjs")], { cwd: root, encoding: "utf8", timeout: CHILD_TIMEOUT_MS, killSignal: "SIGKILL" });
+    if (r.error?.code === "ETIMEDOUT" || r.status === null) assert.fail(`check-artifact.mjs no terminó (señal ${r.signal}, límite ${CHILD_TIMEOUT_MS / 1000} s)`);
+    const stdout = r.stdout ?? "";
+    const stderr = r.stderr ?? "";
+    return { root, status: r.status, stdout, stderr, output: `${stdout}\n${stderr}` };
+  } finally {
+    if (listAs === "unreadable") chmodSync(listPath, 0o644);
+  }
+}
+
+// A rejected list is «the CI fails»: exit 1, a Spanish message about the list, nothing reviewed and no trace.
+function assertListRejectedQuietly(r) {
+  assert.equal(r.status, 1, `la lista debe rechazarse con el código 1 (la CI falla)\n${r.output}`);
+  assert.match(r.stderr, /lista de patrones prohibidos/, `stderr debe explicar en español el problema de la lista\nstderr: ${r.stderr}`);
+  assert.doesNotMatch(r.output, /vercel-config ·|hallazgo\(s\)|listo para subir/, `con la lista rechazada no se revisa nada\n${r.output}`);
+  assert.doesNotMatch(r.output, STACK_TRACE_RE, `no debe terminar con una traza\n${r.output}`);
+}
+
+function captureThrow(fn, what) {
+  try {
+    fn();
+  } catch (error) {
+    return error;
+  }
+  return assert.fail(`${what} debía lanzar un error`);
+}
+
+const realRule = (id) => realList().contents.find((r) => r.id === id);
+const VENDOR_SYNTH = "browser/vendor-synth.js";
+
+describe("[EP00-TBR-020-CA1] a list rule may not use an id of the script's own findings, ignoring case and edge whitespace", () => {
+  test("[EP00-TBR-020-CA1] self-check: the copy of the reserved ids is the closed list of four and every variant keeps the reserved id after trim and lower case", () => {
+    assert.deepEqual([...RESERVED_IDS].sort(), ["scan-error", "symlink", "unreadable", "unsupported-type"], "los ids reservados son exactamente cuatro");
+    for (const id of RESERVED_IDS) {
+      for (const [how, spell] of RESERVED_VARIANTS) assert.equal(spell(id).trim().toLowerCase(), id, `la variante «${how}» de ${id} debe normalizarse a ${id}`);
+    }
+  });
+
+  for (const reserved of RESERVED_IDS) {
+    for (const [how, spell] of RESERVED_VARIANTS) {
+      for (const group of ["names", "contents"]) {
+        const id = spell(reserved);
+        test(`[EP00-TBR-020-CA1] rejects a ${group} rule with the reserved id ${JSON.stringify(id)} (${how}) with exactly one error that names the id as written and the reserved id`, () => {
+          const validatePatternList = exported("validatePatternList");
+          const list = validList020();
+          const index = pushRule(list, group, id);
+          assert.deepEqual(
+            validatePatternList(list),
+            [reservedRuleError(group, index, id, reserved)],
+            `la regla de ${group} con id «${id}» debe rechazarse con un solo error, que nombre el id tal como está escrito y el reservado «${reserved}», sin «id repetido»`,
+          );
+        });
+      }
+    }
+  }
+
+  test("[EP00-TBR-020-CA1] «Scan-Error» in names and «scan-error» in contents give two reservation errors and no «id repetido»", () => {
+    const validatePatternList = exported("validatePatternList");
+    const list = validList020();
+    const n = pushRule(list, "names", "Scan-Error");
+    const c = pushRule(list, "contents", "scan-error");
+    const errors = validatePatternList(list);
+    assert.deepEqual(errors, [reservedRuleError("names", n, "Scan-Error", "scan-error"), reservedRuleError("contents", c, "scan-error", "scan-error")], `se esperaban dos errores de reserva: ${JSON.stringify(errors)}`);
+    assert.ok(!errors.some((e) => e.includes("repetido")), `la causa es la reserva, no la repetición: ${JSON.stringify(errors)}`);
+  });
+
+  for (const id of NOT_RESERVED) {
+    test(`[EP00-TBR-020-CA1] control: ${JSON.stringify(id)} is not reserved, in names or in contents (the reservation does not reach look-alikes)`, () => {
+      const validatePatternList = exported("validatePatternList");
+      for (const group of ["names", "contents"]) {
+        const list = validList020();
+        pushRule(list, group, id);
+        assert.deepEqual(validatePatternList(list), [], `«${id}» en ${group} no es un id reservado y la lista debe ser válida`);
+      }
+    });
+  }
+
+  test("[EP00-TBR-020-CA1] CLI: a copy whose list has a names rule «Scan-Error» and a contents rule « symlink» exits 1 with the header and both ids as written, and reviews nothing", () => {
+    const real = realList();
+    const list = { ...real, names: [...real.names, syntheticNameRule("Scan-Error")], contents: [...real.contents, syntheticContentRule(" symlink")] };
+    const r = copyWithList020(JSON.stringify(list));
+    assertListRejectedQuietly(r);
+    assert.ok(r.stderr.includes("«Scan-Error»") && r.stderr.includes("« symlink»"), `stderr debe nombrar «Scan-Error» y « symlink» tal como están escritos\nstderr: ${r.stderr}`);
+    const want = [LIST_INVALID_HEADER, `  - ${reservedRuleError("names", real.names.length, "Scan-Error", "scan-error")}`, `  - ${reservedRuleError("contents", real.contents.length, " symlink", "symlink")}`].join("\n");
+    assert.equal(withoutFinalNewline(r.stderr), want, `stderr debe ser la cabecera de la lista y los dos errores de reserva\nstderr: ${r.stderr}`);
+  });
+
+  test("[EP00-TBR-020-CA1] H3: an exception on «Scan-Error» and another on « symlink» each get the message that names the rule as written and says it is an id of the script (D-6)", () => {
+    const validatePatternList = exported("validatePatternList");
+    const list = validList020();
+    list.exceptions = [exception020({ rule: "Scan-Error" }), exception020({ rule: " symlink" })];
+    assert.deepEqual(
+      validatePatternList(list),
+      [reservedExceptionError(0, "Scan-Error", "scan-error"), reservedExceptionError(1, " symlink", "symlink")],
+      "cada excepción sobre un id propio del script debe dar su propio mensaje, con la regla tal como está escrita",
+    );
+  });
+
+  test("[EP00-TBR-020-CA1] H3 bis: with a contents rule «scan-error» in the list, the rule gets the reservation error and the exceptions on it are not accepted", () => {
+    const validatePatternList = exported("validatePatternList");
+    const list = validList020();
+    const c = pushRule(list, "contents", "scan-error");
+    list.exceptions = [exception020({ rule: "scan-error" }), exception020({ rule: " Scan-Error" })];
+    assert.deepEqual(
+      validatePatternList(list),
+      [reservedRuleError("contents", c, "scan-error", "scan-error"), reservedExceptionError(0, "scan-error", "scan-error"), reservedExceptionError(1, " Scan-Error", "scan-error")],
+      "la regla reservada y cada excepción sobre ella deben rechazarse; ninguna excepción queda aceptada",
+    );
+  });
+
+  test("[EP00-TBR-020-CA1] the validator accepts an exception « Supabase-Secret-Key » on the contents rule «supabase-secret-key» (same normalization as the ids)", () => {
+    const validatePatternList = exported("validatePatternList");
+    const list = validList020();
+    list.contents.push(realRule("supabase-secret-key"));
+    list.exceptions = [exception020({ rule: " Supabase-Secret-Key " })];
+    assert.deepEqual(validatePatternList(list), [], "una excepción que solo difiere en mayúsculas o espacios al borde apunta a una regla existente y es válida");
+  });
+
+  test("[EP00-TBR-020-CA1] H-A scan: an exception «Supabase-Secret-Key » exempts the file it names, and the same secret in another file is still found", () => {
+    const scanArtifact = exported("scanArtifact");
+    const secret = triggerOf("supabase-secret-key");
+    const list = { version: 1, names: [], contents: [realRule("supabase-secret-key")], exceptions: [exception020({ rule: "Supabase-Secret-Key ", path: VENDOR_SYNTH })] };
+    const dir = makeArtifact({ [VENDOR_SYNTH]: `const k="${secret}";\n`, [MAIN_JS]: `const k="${secret}";\n` }, { clean: false });
+    const findings = scanArtifact(dir, list);
+    assert.deepEqual(findings.map(keyOf).sort(), [`${MAIN_JS}:1|supabase-secret-key`], `la excepción normalizada debe eximir ${VENDOR_SYNTH} y solo ese archivo: ${JSON.stringify(findings)}`);
+  });
+
+  test("[EP00-TBR-020-CA1] H-A reversed: a rule written «Synthetic-Key» is exempted by an exception «synthetic-key», and the finding elsewhere keeps the id as written", () => {
+    const validatePatternList = exported("validatePatternList");
+    const scanArtifact = exported("scanArtifact");
+    const secret = triggerOf("supabase-secret-key");
+    const rule = { ...realRule("supabase-secret-key"), id: "Synthetic-Key" };
+    const exception = exception020({ rule: "synthetic-key", path: VENDOR_SYNTH });
+    const valid = validList020();
+    valid.contents.push(rule);
+    valid.exceptions = [exception];
+    assert.deepEqual(validatePatternList(valid), [], "la excepción «synthetic-key» apunta a la regla «Synthetic-Key» y es válida");
+    const dir = makeArtifact({ [VENDOR_SYNTH]: `const k="${secret}";\n`, [MAIN_JS]: `const k="${secret}";\n` }, { clean: false });
+    const findings = scanArtifact(dir, { version: 1, names: [], contents: [rule], exceptions: [exception] });
+    assert.deepEqual(findings.map(keyOf), [`${MAIN_JS}:1|Synthetic-Key`], `la excepción debe eximir ${VENDOR_SYNTH} y el hallazgo debe llevar el id tal como está escrito: ${JSON.stringify(findings)}`);
+  });
+
+  test("[EP00-TBR-020-CA1] H-A CLI: a copy of the real list plus an exception «Supabase-Secret-Key » hides only the exempted file; the other planted findings stay", () => {
+    const real = realList();
+    const secret = triggerOf("supabase-secret-key");
+    const list = { ...real, exceptions: [exception020({ rule: "Supabase-Secret-Key ", path: VENDOR_SYNTH })] };
+    const r = copyWithList020(JSON.stringify(list), { extraFiles: { [VENDOR_SYNTH]: `const k="${secret}";\n`, [MAIN_JS]: `const k="${secret}";\n` } });
+    assertFinding(r, MAIN_JS, "supabase-secret-key", 1);
+    assertFinding(r, "browser/vercel.json", "vercel-config");
+    assert.ok(!names(r.stderr, VENDOR_SYNTH, "supabase-secret-key"), `${VENDOR_SYNTH} está eximido y no debe salir\nstderr: ${r.stderr}`);
+    assert.deepEqual(leakedPieces(r.output, secret), [], "la salida no puede mostrar el secreto");
+  });
+});
+
+describe("[EP00-TBR-020-CA2] a list that cannot be read or is not valid JSON fails closed with a fixed Spanish text, the path relative to the front and no technical detail", () => {
+  const JSON_SENTINEL = "SYNTHSENTINEL_" + "q7x2";
+  const CLI_CASES = [
+    ["a missing list (ENOENT)", { listText: undefined }, unreadableListText],
+    ["a list that is a folder (EISDIR)", { listAs: "dir" }, unreadableListText],
+    ["a list without read permission (EACCES)", { listAs: "unreadable", posixOnly: true }, unreadableListText],
+    ["invalid JSON that holds a synthetic sentinel", { listText: `{"names": ${JSON_SENTINEL}_7}` }, invalidJsonListText],
+    ["an empty file", { listText: "" }, invalidJsonListText],
+    ["truncated JSON", { listText: "{ names: [ " }, invalidJsonListText],
+  ];
+  for (const [title, { listText, listAs, posixOnly }, textOf] of CLI_CASES) {
+    test(`[EP00-TBR-020-CA2] CLI on ${title}: exit 1 with the exact text of design §8.4, the relative path, no error code, no parser detail, no trace and nothing reviewed`, (t) => {
+      if (posixOnly && (process.platform === "win32" || process.getuid?.() === 0)) { t.skip("sin permisos POSIX o corriendo como root"); return; }
+      const text = listAs === "unreadable" ? readFileSync(LIST, "utf8") : listText;
+      const r = copyWithList020(text, { listAs });
+      const want = textOf(LIST_SHOWN);
+      assert.equal(r.status, 1, `la lista ilegible o inválida falla cerrada con el código 1\n${r.output}`);
+      assert.equal(withoutFinalNewline(r.stderr), want, `stderr debe ser exactamente «${want}»\nstderr: ${r.stderr}`);
+      assert.ok(!r.output.includes(r.root), `la salida no puede mostrar la ruta absoluta de la copia\n${r.output}`);
+      assert.ok(!r.output.includes(FRONT), `la salida no puede mostrar la ruta absoluta del front\n${r.output}`);
+      assert.doesNotMatch(r.output, TECH_CODE_RE, `la salida no puede llevar el código del error\n${r.output}`);
+      assert.doesNotMatch(r.output, PARSER_DETAIL_RE, `la salida no puede llevar el detalle del error de JSON\n${r.output}`);
+      assert.ok(!r.output.includes(JSON_SENTINEL), `la salida no puede mostrar un fragmento del contenido de la lista\n${r.output}`);
+      assert.doesNotMatch(r.output, STACK_TRACE_RE, `no debe terminar con una traza\n${r.output}`);
+      assert.doesNotMatch(r.output, /vercel-config ·|hallazgo\(s\)|listo para subir/, `con la lista ilegible o inválida no se revisa nada\n${r.output}`);
+    });
+  }
+
+  test("[EP00-TBR-020-CA2] control: valid JSON that is not an object still goes to the validator, not to the load errors", () => {
+    const r = copyWithList020("[]");
+    assertListRejectedQuietly(r);
+    assert.ok(r.stderr.startsWith(LIST_INVALID_HEADER), `un JSON válido que no es un objeto lo rechaza el validador\nstderr: ${r.stderr}`);
+    assert.ok(!r.stderr.includes("no es un JSON válido") && !r.stderr.includes("No se pudo leer"), `no es un error de carga\nstderr: ${r.stderr}`);
+  });
+
+  test("[EP00-TBR-020-CA2] in process: loadPatternList on a missing file under tmp/ throws the exact text with the path relative to the front and no cause", () => {
+    const loadPatternList = exported("loadPatternList");
+    const file = join(makeDir("list-"), "synthetic-missing-list.json");
+    const shown = relativePath(FRONT, file).split("\\").join("/");
+    const error = captureThrow(() => loadPatternList(file), "loadPatternList con un archivo ausente");
+    assert.equal(error?.message, unreadableListText(shown), `el mensaje debe ser el texto fijo con la ruta relativa al front: ${error?.message}`);
+    assert.ok(!error.message.includes(FRONT), `el mensaje no puede llevar la ruta absoluta: ${error.message}`);
+    assert.equal(error.cause, undefined, "el error no puede arrastrar el error original (cause)");
+  });
+
+  test("[EP00-TBR-020-CA2] in process: loadPatternList on invalid JSON under tmp/ throws the exact text with the path relative to the front, no fragment and no cause", () => {
+    const loadPatternList = exported("loadPatternList");
+    const file = join(makeDir("list-"), "synthetic-list.json");
+    writeFileSync(file, `{"names": ${JSON_SENTINEL}_8}`);
+    const shown = relativePath(FRONT, file).split("\\").join("/");
+    const error = captureThrow(() => loadPatternList(file), "loadPatternList con un JSON inválido");
+    assert.equal(error?.message, invalidJsonListText(shown), `el mensaje debe ser el texto fijo con la ruta relativa al front: ${error?.message}`);
+    assert.ok(!error.message.includes(JSON_SENTINEL), `el mensaje no puede llevar un fragmento del contenido: ${error.message}`);
+    assert.equal(error.cause, undefined, "el error no puede arrastrar el error del parser (cause)");
+  });
+
+  test("[EP00-TBR-020-CA2] in process: loadPatternList on a path outside the front names only the file (D-4) and writes nothing", () => {
+    const loadPatternList = exported("loadPatternList");
+    const folder = join(tmpdir(), `the-brain-020-synthetic-missing-${process.pid}-${Date.now()}`);
+    const file = join(folder, "synthetic-list.json");
+    assert.ok(!existsSync(folder), `la carpeta sintética no debe existir: ${folder}`);
+    const error = captureThrow(() => loadPatternList(file), "loadPatternList con una ruta fuera del front");
+    assert.equal(error?.message, unreadableListText("synthetic-list.json"), `fuera del front el mensaje nombra solo el archivo: ${error?.message}`);
+    assert.ok(!error.message.includes(tmpdir()), `el mensaje no puede llevar la carpeta temporal del sistema: ${error.message}`);
+    assert.ok(!existsSync(folder), "la prueba no debe escribir nada fuera de tmp/");
+  });
+
+  test("[EP00-TBR-020-CA2] H8: an unforeseen error while the list is validated exits 1 with the fixed text and the error type, no sentinel, no trace and nothing reviewed", () => {
+    const MARKER = "synthetic-h8-marker";
+    const real = realList();
+    const list = { ...real, contents: [...real.contents, syntheticContentRule(MARKER)] };
+    // String.prototype.trim throws a TypeError with the sentinel only on the marker id of the synthetic list.
+    const preload = join(makeDir("preload-"), "preload.mjs");
+    writeFileSync(preload, `
+const trim = String.prototype.trim;
+String.prototype.trim = function () {
+  if (String(this) === ${JSON.stringify(MARKER)}) throw new TypeError(${JSON.stringify(SENTINEL)});
+  return trim.call(this);
+};
+`);
+    const r = copyWithList020(JSON.stringify(list), { nodeArgs: ["--import", pathToFileURL(preload).href] });
+    const want = unexpectedListText(LIST_SHOWN, "TypeError");
+    assert.equal(r.status, 1, `un error ajeno al cargar la lista falla cerrado con el código 1\n${r.output}`);
+    assert.ok(!r.output.includes(SENTINEL), `la salida no puede mostrar error.message (centinela)\n${r.output}`);
+    assert.equal(withoutFinalNewline(r.stderr), want, `stderr debe ser exactamente «${want}»\nstderr: ${r.stderr}`);
+    assert.ok(!r.output.includes(r.root), `la salida no puede mostrar la ruta absoluta de la copia\n${r.output}`);
+    assert.doesNotMatch(r.output, STACK_TRACE_RE, `no debe terminar con una traza\n${r.output}`);
+    assert.doesNotMatch(r.output, /vercel-config ·|hallazgo\(s\)|listo para subir/, `no se revisa nada\n${r.output}`);
+  });
+});
+
+// Normalized twin of minimumExceptionHits (design §8.6, D-5). It is added; the exact guard above stays as it is.
+const normalizeId020 = (id) => (typeof id === "string" ? id.trim().toLowerCase() : null);
+const MINIMUM_KEYS = new Set(MINIMUM_IDS.map(normalizeId020));
+const minimumExceptionHitsNormalized = (list) =>
+  (Array.isArray(list?.exceptions) ? list.exceptions : []).filter((e) => MINIMUM_KEYS.has(normalizeId020(e?.rule))).map((e) => `${e.rule} → ${e.path}`);
+
+describe("[EP00-TBR-020-CA3] no regression: the mandatory minimum does not change and its guard also catches ids written with other case or edge whitespace", () => {
+  test("[EP00-TBR-020-CA3] no exception of the real list touches a rule of the minimum, comparing ids without case or edge whitespace", () => {
+    const hits = minimumExceptionHitsNormalized(realList());
+    assert.deepEqual(hits, [], `hay excepciones sobre reglas del mínimo: ${hits.join(", ")}`);
+  });
+
+  test("[EP00-TBR-020-CA3] self-check: the normalized guard catches «Supabase-Secret-Key», « private-key-block » and «SERVICE-ROLE-JWT», lets «github-token» pass, and the exact guard alone misses them", () => {
+    const list = { exceptions: ["Supabase-Secret-Key", " private-key-block ", "SERVICE-ROLE-JWT", "github-token"].map((rule) => ({ rule, path: VENDOR_SYNTH })) };
+    assert.deepEqual(
+      minimumExceptionHitsNormalized(list),
+      [`Supabase-Secret-Key → ${VENDOR_SYNTH}`, ` private-key-block  → ${VENDOR_SYNTH}`, `SERVICE-ROLE-JWT → ${VENDOR_SYNTH}`],
+      "la guarda normalizada debe detectar las tres excepciones sobre el mínimo y dejar pasar github-token",
+    );
+    assert.deepEqual(minimumExceptionHits(list), [], "la guarda exacta no las ve: por eso se añade la normalizada");
+  });
+
+  test("[EP00-TBR-020-CA3] the real list has no reserved id and no two ids that collide without case or edge whitespace, so its meaning does not change", () => {
+    const real = realList();
+    const ids = [...real.names, ...real.contents].map((r) => r.id);
+    const reserved = ids.filter((id) => RESERVED_IDS.includes(normalizeId020(id)));
+    assert.deepEqual(reserved, [], `la lista real no puede usar un id reservado: ${reserved.join(", ")}`);
+    const seen = new Map();
+    const collisions = [];
+    for (const id of ids) {
+      const key = normalizeId020(id);
+      if (seen.has(key)) collisions.push(`${seen.get(key)} / ${id}`);
+      else seen.set(key, id);
+    }
+    assert.deepEqual(collisions, [], `la lista real no puede tener ids que choquen al normalizar: ${collisions.join(", ")}`);
+  });
+});
+
+describe("[EP00-TBR-020-CA4] two rule ids that only differ in case or edge whitespace are rejected as repeated", () => {
+  const PAIRS = [
+    ["names × names, case", "names", "aws-key", "names", "AWS-Key"],
+    ["names × names, a leading space", "names", "aws-key", "names", " aws-key"],
+    ["names × names, spaces on both sides", "names", "aws-key", "names", " aws-key "],
+    ["names × names, a trailing tab", "names", "aws-key", "names", "aws-key\t"],
+    ["names × names, the first one in mixed case", "names", "AWS-Key", "names", "aws-key"],
+    ["names × contents, case and a trailing space (design H-B)", "names", "aws-key", "contents", "AWS-Key "],
+    ["contents × contents, case (design H-B)", "contents", "synthetic-rule", "contents", "Synthetic-Rule"],
+    ["contents × contents, a leading tab", "contents", "synthetic-rule", "contents", "\tSynthetic-Rule"],
+  ];
+  for (const [title, firstGroup, first, secondGroup, second] of PAIRS) {
+    test(`[EP00-TBR-020-CA4] ${title}: ${JSON.stringify(first)} then ${JSON.stringify(second)} give exactly one repeated-id error that names the second id as written and the first one`, () => {
+      const validatePatternList = exported("validatePatternList");
+      const list = validList020();
+      pushRule(list, firstGroup, first);
+      const index = pushRule(list, secondGroup, second);
+      assert.deepEqual(validatePatternList(list), [repeatedRuleError(secondGroup, index, second, first)], `«${second}» repite «${first}» sin contar mayúsculas ni espacios al borde y debe rechazarse`);
+    });
+  }
+
+  test("[EP00-TBR-020-CA4] control: «aws-key» and «aws-key-2» are different ids and the list is valid", () => {
+    const validatePatternList = exported("validatePatternList");
+    const list = validList020();
+    pushRule(list, "names", "aws-key");
+    pushRule(list, "contents", "aws-key-2");
+    assert.deepEqual(validatePatternList(list), [], "«aws-key» y «aws-key-2» no son el mismo id");
+  });
+
+  test("[EP00-TBR-020-CA4] control: an id written twice exactly keeps the current repeated-id text", () => {
+    const validatePatternList = exported("validatePatternList");
+    const list = validList020();
+    pushRule(list, "names", "aws-key");
+    const index = pushRule(list, "names", "aws-key");
+    assert.deepEqual(validatePatternList(list), [`names[${index}] (aws-key): id repetido «aws-key»`], "con dos textos idénticos el mensaje de hoy no cambia");
+  });
+
+  test("[EP00-TBR-020-CA4] three spellings of one id: the second and the third give one repeated-id error each, and both name the first one", () => {
+    const validatePatternList = exported("validatePatternList");
+    const list = validList020();
+    pushRule(list, "names", "aws-key");
+    const second = pushRule(list, "names", "AWS-Key");
+    const third = pushRule(list, "contents", " aws-key");
+    assert.deepEqual(
+      validatePatternList(list),
+      [repeatedRuleError("names", second, "AWS-Key", "aws-key"), repeatedRuleError("contents", third, " aws-key", "aws-key")],
+      "la segunda y la tercera aparición deben dar un error cada una, y las dos deben citar la primera",
+    );
+  });
+
+  test("[EP00-TBR-020-CA4] control: empty or whitespace-only ids give the missing-id error, never a repeated-id error", () => {
+    const validatePatternList = exported("validatePatternList");
+    const list = validList020();
+    pushRule(list, "names", "");
+    pushRule(list, "names", "   ");
+    pushRule(list, "contents", "\t");
+    const errors = validatePatternList(list);
+    assert.equal(errors.length, 3, `se esperaban tres errores «falta el id»: ${JSON.stringify(errors)}`);
+    assert.ok(errors.every((e) => e.endsWith(": falta el id")), `cada id vacío o solo con espacios da «falta el id»: ${JSON.stringify(errors)}`);
+    assert.ok(!errors.some((e) => e.includes("repetido")), `un id vacío nunca es «repetido»: ${JSON.stringify(errors)}`);
+  });
+
+  test("[EP00-TBR-020-CA4] a repeated rule with an exception on it: only the repeated-id error, the list is rejected and the exception does not exempt in silence", () => {
+    const validatePatternList = exported("validatePatternList");
+    const exception = exception020({ rule: "synthetic-rule", path: VENDOR_SYNTH });
+    const list = validList020();
+    pushRule(list, "contents", "Synthetic-Rule");
+    const index = pushRule(list, "contents", "synthetic-rule");
+    list.exceptions = [exception];
+    assert.deepEqual(validatePatternList(list), [repeatedRuleError("contents", index, "synthetic-rule", "Synthetic-Rule")], "solo debe salir el error de repetido");
+    const real = realList();
+    const cli = { ...real, contents: [...real.contents, syntheticContentRule("Synthetic-Rule"), syntheticContentRule("synthetic-rule")], exceptions: [exception] };
+    const r = copyWithList020(JSON.stringify(cli));
+    assertListRejectedQuietly(r);
+    assert.ok(r.stderr.includes(repeatedRuleError("contents", real.contents.length + 1, "synthetic-rule", "Synthetic-Rule")), `stderr debe nombrar el id repetido y el primero\nstderr: ${r.stderr}`);
+  });
+
+  test("[EP00-TBR-020-CA4] CLI: a copy whose list has «aws-key» and «AWS-Key» exits 1 with the header and the repeated id, and reviews nothing", () => {
+    const real = realList();
+    const list = { ...real, names: [...real.names, syntheticNameRule("aws-key"), syntheticNameRule("AWS-Key")] };
+    const r = copyWithList020(JSON.stringify(list));
+    assertListRejectedQuietly(r);
+    assert.ok(r.stderr.includes("«AWS-Key»"), `stderr debe nombrar el id repetido «AWS-Key»\nstderr: ${r.stderr}`);
+    const want = [LIST_INVALID_HEADER, `  - ${repeatedRuleError("names", real.names.length + 1, "AWS-Key", "aws-key")}`].join("\n");
+    assert.equal(withoutFinalNewline(r.stderr), want, `stderr debe ser la cabecera de la lista y el error de repetido\nstderr: ${r.stderr}`);
+  });
+});
