@@ -2862,3 +2862,136 @@ JSON.parse = function (text, reviver) {
     });
   }
 });
+
+// =============================================================================================
+// EP00-TBR-020 · R2 (round 1 of 3), tests for the round 1 fixes on 39bb38f. Only additions: no earlier test is touched.
+// [EP00-TBR-020-CA2] Q-1 and O-3: loadPatternList with a path that is not a text (URL, Buffer) or that shows as an
+// empty name («/») throws the script's own error with the fixed text «la ruta indicada»: no TypeError, no empty name,
+// no absolute path and no error code. Text paths keep the earlier shown path (relative inside the front, name outside).
+// [EP00-TBR-020-CA1] O-1: scanArtifact without validation never lets a blank exception exempt a blank rule id.
+// The validator side (blank ids give «falta el id», never «repetido») is already pinned by the T1 control
+// «[EP00-TBR-020-CA4] control: empty or whitespace-only ids give the missing-id error, never a repeated-id error».
+// [EP00-TBR-020-CA2] S-1: a hostile thrown value (revoked Proxy, Proxy whose traps throw) while main loads the list
+// gives the fixed unexpected-error text, no trace and exit code 1. Reached from outside with a preload that wraps
+// JSON.parse, as the H8 tests of T3 do; the script is not touched.
+// Synthetic data only; fixtures under tmp/.
+// =============================================================================================
+const GENERIC_UNREADABLE_LIST_020 = "No se pudo leer la lista de patrones prohibidos en la ruta indicada";
+
+describe("[EP00-TBR-020-CA2] R2 · a list path that is not a text or shows as an empty name gives the fixed text «la ruta indicada» (Q-1, O-3)", () => {
+  const missingInside = () => join(FRONT, "tmp", `synthetic-r2-020-${process.pid}-missing.json`);
+  const missingOutside = () => join(FRONT, "..", `synthetic-r2-020-${process.pid}-missing.json`);
+  const NOT_TEXT_PATHS = [
+    ["a file URL inside the front that does not exist", () => pathToFileURL(missingInside())],
+    ["a file URL outside the front that does not exist", () => pathToFileURL(missingOutside())],
+    ["a Buffer inside the front that does not exist", () => Buffer.from(missingInside())],
+    ["a Buffer outside the front that does not exist", () => Buffer.from(missingOutside())],
+    ["the text «/» (a folder whose name is empty)", () => "/"],
+  ];
+  for (const [title, makePath] of NOT_TEXT_PATHS) {
+    test(`[EP00-TBR-020-CA2] in process: loadPatternList with ${title} throws exactly «${GENERIC_UNREADABLE_LIST_020}», not a TypeError, with no code and no absolute path`, () => {
+      const loadPatternList = exported("loadPatternList");
+      const path = makePath();
+      for (const p of [missingInside(), missingOutside()]) assert.ok(!existsSync(p), `la ruta sintética no debe existir: ${p}`);
+      const error = captureThrow(() => loadPatternList(path), `loadPatternList con ${title}`);
+      assert.ok(error instanceof Error, `debe lanzar un Error, no ${typeof error}`);
+      assert.ok(!(error instanceof TypeError), `no puede salir un TypeError técnico: ${error.name}: ${error.message}`);
+      assert.equal(error.name, "PatternListError", `debe ser el error propio del script, no ${error.name}`);
+      assert.equal(error.message, GENERIC_UNREADABLE_LIST_020, `el mensaje debe ser exactamente el texto fijo: ${JSON.stringify(error.message)}`);
+      assert.equal(error.code, undefined, `el error no puede llevar código técnico: ${error.code}`);
+      assert.doesNotMatch(error.message, TECH_CODE_RE, `el mensaje no puede llevar un código técnico: ${error.message}`);
+      assert.ok(!error.message.includes(dirname(FRONT)), `el mensaje no puede llevar una ruta absoluta: ${error.message}`);
+      assert.doesNotMatch(error.message, / en $|\(\)$/, `el mensaje no puede terminar con un nombre vacío: ${JSON.stringify(error.message)}`);
+    });
+  }
+
+  test("[EP00-TBR-020-CA2] control: a text path inside the front still shows relative and one outside shows only the file name, as before", () => {
+    const loadPatternList = exported("loadPatternList");
+    const cases = [
+      [missingInside(), `tmp/${basenamePath(missingInside())}`],
+      [missingOutside(), basenamePath(missingOutside())],
+    ];
+    for (const [path, shown] of cases) {
+      assert.ok(!existsSync(path), `la ruta sintética no debe existir: ${path}`);
+      const error = captureThrow(() => loadPatternList(path), `loadPatternList con ${path}`);
+      assert.equal(error?.message, unreadableListText(shown), `el mensaje debe nombrar «${shown}», no el texto genérico: ${error?.message}`);
+      assert.ok(!error.message.includes("la ruta indicada"), `una ruta de texto normal no usa el texto genérico: ${error.message}`);
+    }
+  });
+});
+
+describe("[EP00-TBR-020-CA1] R2 · scanArtifact without validation: a blank exception never exempts a blank rule id (O-1)", () => {
+  const BLANK_PAIRS = [
+    ["an empty rule id and an empty exception", "", ""],
+    ["a rule id of three spaces and an empty exception", "   ", ""],
+    ["a rule id of three spaces and an exception of three spaces", "   ", "   "],
+    ["an empty rule id and an exception of a tab and a no-break space", "", "\t "],
+  ];
+  for (const [title, ruleId, exceptionRule] of BLANK_PAIRS) {
+    test(`[EP00-TBR-020-CA1] scan: ${title} on the same file, the rule's finding still comes out`, () => {
+      const scanArtifact = exported("scanArtifact");
+      const secret = triggerOf("supabase-secret-key");
+      const list = { version: 1, names: [], contents: [{ ...realRule("supabase-secret-key"), id: ruleId }], exceptions: [{ rule: exceptionRule, path: VENDOR_SYNTH }] };
+      const dir = makeArtifact({ [VENDOR_SYNTH]: `const k="${secret}";\n` }, { clean: false });
+      const findings = scanArtifact(dir, list);
+      assert.deepEqual(findings.map(keyOf), [`${VENDOR_SYNTH}:1|${ruleId}`], `un id en blanco nunca exime nada: ${JSON.stringify(findings)}`);
+    });
+  }
+
+  test("[EP00-TBR-020-CA1] scan: two blank rule ids and one blank exception on the same file, both findings still come out", () => {
+    const scanArtifact = exported("scanArtifact");
+    const secret = triggerOf("supabase-secret-key");
+    const base = realRule("supabase-secret-key");
+    const list = { version: 1, names: [], contents: [{ ...base, id: "" }, { ...base, id: "  " }], exceptions: [{ rule: " ", path: VENDOR_SYNTH }] };
+    const dir = makeArtifact({ [VENDOR_SYNTH]: `const k="${secret}";\n` }, { clean: false });
+    assert.deepEqual(scanArtifact(dir, list).map(keyOf), [`${VENDOR_SYNTH}:1|`, `${VENDOR_SYNTH}:1|  `], "cada regla con id en blanco da su hallazgo");
+  });
+
+  test("[EP00-TBR-020-CA1] control: a non-blank exception on the same rule id still exempts the file it names", () => {
+    const scanArtifact = exported("scanArtifact");
+    const secret = triggerOf("supabase-secret-key");
+    const list = { version: 1, names: [], contents: [realRule("supabase-secret-key")], exceptions: [{ rule: " Supabase-Secret-Key ", path: VENDOR_SYNTH }] };
+    const dir = makeArtifact({ [VENDOR_SYNTH]: `const k="${secret}";\n`, [MAIN_JS]: `const k="${secret}";\n` }, { clean: false });
+    assert.deepEqual(scanArtifact(dir, list).map(keyOf), [`${MAIN_JS}:1|supabase-secret-key`], "la excepción con texto exime solo el archivo que nombra");
+  });
+});
+
+describe("[EP00-TBR-020-CA2] R2 · a hostile value thrown while main loads the list gives the fixed unexpected-error text (S-1)", () => {
+  // Same technique as the H8 tests of T3: reading «names» of the parsed list throws the value built by `throwStatement`.
+  const hostilePreload020 = (throwStatement) => `
+const parse = JSON.parse;
+JSON.parse = function (text, reviver) {
+  const value = parse.call(JSON, text, reviver);
+  if (value === null || typeof value !== "object" || value.synthS1Marker !== true) return value;
+  return new Proxy(value, {
+    get(target, key, receiver) {
+      if (key === "names") ${throwStatement};
+      return Reflect.get(target, key, receiver);
+    },
+  });
+};
+`;
+  const HOSTILE_THROWS = [
+    ["a revoked Proxy", `{ const r = Proxy.revocable({}, {}); r.revoke(); throw r.proxy; }`],
+    ["a revoked Proxy of a function", `{ const r = Proxy.revocable(function synth() {}, {}); r.revoke(); throw r.proxy; }`],
+    [
+      "a Proxy whose prototype and property traps throw an error with the sentinel",
+      `throw new Proxy({}, { getPrototypeOf() { throw new Error(${JSON.stringify(SENTINEL)}); }, get() { throw new Error(${JSON.stringify(SENTINEL)}); } })`,
+    ],
+  ];
+  for (const [title, throwStatement] of HOSTILE_THROWS) {
+    test(`[EP00-TBR-020-CA2] CLI: ${title} thrown while the list is validated gives exactly the fixed text with «Error», exit 1, no trace and nothing reviewed`, () => {
+      const preload = join(makeDir("preload-"), "preload.mjs");
+      writeFileSync(preload, hostilePreload020(throwStatement));
+      const r = copyWithList020(JSON.stringify({ ...realList(), synthS1Marker: true }), { nodeArgs: ["--import", pathToFileURL(preload).href] });
+      const want = unexpectedListText(LIST_SHOWN, "Error");
+      assert.equal(r.status, 1, `un valor hostil al cargar la lista falla cerrado con el código 1\n${r.output}`);
+      assert.equal(withoutFinalNewline(r.stderr), want, `stderr debe ser exactamente «${want}»\nstderr: ${r.stderr}`);
+      assert.equal(r.stdout, "", `stdout debe quedar vacío\nstdout: ${r.stdout}`);
+      assert.doesNotMatch(r.output, STACK_TRACE_RE, `no debe terminar con una traza\n${r.output}`);
+      assert.ok(!r.output.includes(SENTINEL), `la salida no puede mostrar el mensaje del valor hostil (centinela)\n${r.output}`);
+      assert.ok(!r.output.includes(r.root), `la salida no puede mostrar la ruta absoluta de la copia\n${r.output}`);
+      assert.doesNotMatch(r.output, /TypeError|revoked|Proxy/, `la salida no puede mostrar el detalle del motor\n${r.output}`);
+    });
+  }
+});
