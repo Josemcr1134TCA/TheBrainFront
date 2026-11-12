@@ -1473,3 +1473,729 @@ describe("[EP00-TBR-002-CA1][EP00-TBR-002-CA3] package.json scripts (§8.6)", ()
     );
   });
 });
+
+// =============================================================================================
+// EP00-TBR-019 · the artifact check gives a clear result on very long blocks (docs/diseno/EP00-TBR-019.md §8.5, as
+// adjusted by §12.4; DEC-0020). Written black-box and before the fix, on c3752ac. Only added: no earlier test changes.
+// [EP00-TBR-019-CA1] A block of 7 000 000 characters (more than 6 MB in decimal and binary units) after the prefix of
+// every content rule gives a clear result in bounded time: the finding of the rule, or the normal result, and never a
+// trace or the value. [V-1]: under 7 s per 7 M file, timed with timedScan; every CLI run ends in under 60 s; both CLI
+// cases run with a 512 MB heap as a guard. AJ-6: private-key-block and postgres-url-with-password keep their open
+// ranges (the PO rejected [V-4]), so on a long block they accept exactly one of two results: the normal one (branch A)
+// or one scan-error of that rule (branch B). The branch seen is reported through t.diagnostic.
+// [EP00-TBR-019-CA2] A seeded corpus gives the same findings with the real list and with a copy holding the current
+// text of the 6 [V-3] patterns; the text of the 2 unbounded rules is pinned (AJ-5).
+// [EP00-TBR-019-CA3] An unforeseen error while scanning becomes one scan-error per rule and file (DEC-0020 §2): the
+// scan goes on, earlier matches stay, an lstatSync failure gives unreadable, and a final net in main exits 1 with no
+// trace. Errors are injected without touching the product code: getters in a synthetic list, or a preload under tmp/.
+// =============================================================================================
+const LONG = 7_000_000;
+const LONG_LIMIT_MS = 7_000; // [V-1] 7 s per 7 M file, the 1 s per million pace of HOSTILE_LIMIT_MS
+const LONG_KILL_MS = CHILD_TIMEOUT_MS; // [V-1] 60 s per run
+const LONG_PATH = "browser/chunk-LONGBLOCK.js";
+const HEAP_FLAG = "--max-old-space-size=512";
+const OOM_RE = /heap out of memory|Allocation failed|FATAL ERROR/i;
+const SENTINEL = "synthetic-sentinel-" + "q7x2";
+// [V-2] sample of a scan-error, exactly as in design §8.4 and DEC-0020 §2.
+const scanErrorSample = (id, type = "RangeError") => `no se pudo revisar con la regla «${id}» (${type}); el archivo no pasa la revisión`;
+const scanErrorLine = (path, id, type) => `ERROR  ${path}  · scan-error · ${scanErrorSample(id, type)}`;
+const keyOf = (f) => `${f.path}:${f.line}|${f.rule}`;
+const sameList = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+// AJ-6 · the result on a rule whose open range sits in the middle of its pattern: branch A (`normal`, sorted keys) or
+// branch B (one scan-error of that rule and nothing else). Anything else fails and says what arrived.
+function unboundedBranch(findings, id, path, normal) {
+  const got = findings.map(keyOf).sort();
+  if (sameList(got, normal)) return "A";
+  if (sameList(got, [`${path}:0|scan-error`]) && findings[0].sample === scanErrorSample(id)) return "B";
+  const errors = findings.filter((f) => f.rule === "scan-error");
+  const why = !findings.length
+    ? "una lista vacía (un catch silencioso no revisa y no avisa)"
+    : errors.length && errors.length < findings.length
+      ? "los dos conjuntos mezclados"
+      : errors.some((f) => f.sample !== scanErrorSample(id))
+        ? `un scan-error con otro texto (otra regla u otro tipo de error); se esperaba «${scanErrorSample(id)}»`
+        : "un resultado distinto";
+  assert.fail(`${id}: se esperaba exactamente la rama A (${normal.join(", ")}) o la rama B (un único scan-error de ${id}); llegó ${why}: ${JSON.stringify(findings).slice(0, 2_000)}`);
+}
+
+// Runs the CLI with extra Node flags (heap guard, preload) and times the whole run.
+function runNode(nodeArgs, args) {
+  assert.ok(existsSync(SCRIPT), "no existe el script scripts/check-artifact.mjs");
+  const t0 = performance.now();
+  const r = spawnSync(process.execPath, [...nodeArgs, SCRIPT, ...args], { cwd: FRONT, encoding: "utf8", timeout: CHILD_TIMEOUT_MS, killSignal: "SIGKILL", maxBuffer: 64 * 1024 * 1024 });
+  const ms = performance.now() - t0;
+  if (r.error?.code === "ETIMEDOUT" || r.status === null) {
+    assert.fail(`check-artifact.mjs no terminó (señal ${r.signal}, límite ${CHILD_TIMEOUT_MS / 1000} s)\n${(r.stdout ?? "").slice(0, 2_000)}${(r.stderr ?? "").slice(0, 2_000)}`);
+  }
+  const stdout = r.stdout ?? "";
+  const stderr = r.stderr ?? "";
+  return { status: r.status, stdout, stderr, output: `${stdout}\n${stderr}`, ms };
+}
+// Writes an ES module under tmp/ and runs the CLI with it loaded first through --import.
+function runWithPreload(source, args) {
+  const preload = join(makeDir("preload-"), "preload.mjs");
+  writeFileSync(preload, source);
+  return runNode(["--import", pathToFileURL(preload).href], args);
+}
+const errorLines = (stderr) => stderr.split("\n").filter((l) => l.startsWith("ERROR"));
+
+// CA1 · one long block per content rule of the real list, on line 1; the rule's trigger goes on line 2. `expect` is the
+// exact list of rules found on line 1. Without `expect` the rule keeps its open range (AJ-6) and accepts branch A or B.
+const LONG_BY_RULE = {
+  "private-key-block": [
+    ["BEGIN followed by 3.5 M words of one letter and no PRIVATE KEY", () => BEGIN + "A ".repeat(LONG / 2)],
+    ["BEGIN followed by one 7 M word that never closes", () => BEGIN + "A".repeat(LONG)],
+  ],
+  "service-role-jwt": [["a dotted triple with a 7 M payload that is not JSON", () => `eyJa.eyJ${"A".repeat(LONG)}.c2ln`, []]],
+  "supabase-secret-key": [["sb_secret_ followed by 7 M characters of its class", () => `sb_${"secret_"}${"a".repeat(LONG)}`, ["supabase-secret-key"]]],
+  "supabase-service-role-env": [["SUPABASE_SERVICE_ROLE_ followed by 7 M letters (no closing boundary)", () => `SUPABASE_${"SERVICE_ROLE_"}${"A".repeat(LONG)}`, []]],
+  "vercel-token-env": [["VERCEL_ followed by 7 M letters", () => `VERCEL_${"A".repeat(LONG)}`, []]],
+  "postgres-url-with-password": [
+    ["postgres:// followed by a 7 M user that never closes with a colon", () => `postgres${"://"}${"a".repeat(LONG)}`],
+    ["postgres://a: followed by a 7 M password that never closes with an at sign", () => `postgres${"://"}a:${"b:".repeat(LONG / 2)}`],
+  ],
+  "github-token": [["github_pat_ followed by 7 M characters of its class", () => `github_${"pat_"}${"a".repeat(LONG)}`, ["github-token"]]],
+  "aws-access-key-id": [["AKIA followed by 7 M characters of its class", () => `AK${"IA"}${"A".repeat(LONG)}`, ["aws-access-key-id"]]],
+  "stripe-secret-key": [["sk_live_ followed by 7 M characters of its class", () => `sk${"_live_"}${"a".repeat(LONG)}`, ["stripe-secret-key"]]],
+  "slack-token": [["xoxb- followed by 7 M characters of its class", () => `xo${"xb-"}${"a".repeat(LONG)}`, ["slack-token"]]],
+  "google-api-key": [["AIza followed by 7 M characters of its class", () => `AI${"za"}${"a".repeat(LONG)}`, ["google-api-key"]]],
+  "npm-token": [["npm_ followed by 7 M characters of its class", () => `np${"m_"}${"a".repeat(LONG)}`, ["npm-token"]]],
+  "anthropic-api-key": [["sk-ant- followed by 7 M characters of its class", () => `sk${"-ant-"}${"a".repeat(LONG)}`, ["anthropic-api-key"]]],
+  "ai-provider-secret-key": [["sk- followed by 7 M characters of its class", () => `sk${"-"}${"a".repeat(LONG)}`, ["ai-provider-secret-key"]]],
+};
+
+describe("[EP00-TBR-019-CA1] a 7 M block after the prefix of every content rule gives a clear result in under 7 s", () => {
+  test("[EP00-TBR-019-CA1] every content rule of the real list has a long-block case here (a new rule must add its own)", () => {
+    const ids = (realList().contents ?? []).map((r) => r.id);
+    assert.deepEqual(ids.filter((id) => !(id in LONG_BY_RULE) || !(id in TRIGGER_BY_RULE)), [], "cada regla de contenido de la lista real necesita un caso de bloque largo y un disparador en esta prueba");
+    assert.deepEqual(Object.keys(LONG_BY_RULE).filter((id) => !ids.includes(id)), [], "hay casos de bloque largo para reglas que ya no están en la lista");
+  });
+
+  test("[EP00-TBR-019-CA1] self-check: every block is longer than 6 MB in decimal and binary units, and sits on one line", () => {
+    for (const [id, cases] of Object.entries(LONG_BY_RULE)) {
+      for (const [title, make] of cases) {
+        const block = make();
+        assert.ok(block.length >= LONG && block.length > 6_291_456, `${id} · ${title}: mide ${block.length} caracteres; debe pasar de 6 MB`);
+        assert.ok(!block.includes("\n"), `${id} · ${title}: el bloque debe ir en una sola línea`);
+      }
+    }
+  });
+
+  for (const [id, cases] of Object.entries(LONG_BY_RULE)) {
+    for (const [title, make, expect] of cases) {
+      const how = expect ? "the exact result and no scan-error" : "exactly branch A (normal result) or branch B (one scan-error of the rule)";
+      test(`[EP00-TBR-019-CA1] ${id} · ${title}: ${how}, no trace, no value, in under 7 s, and the trigger on the next line`, (t) => {
+        const block = make();
+        const trigger = TRIGGER_BY_RULE[id]();
+        const dir = makeArtifact({ [LONG_PATH]: `${block}\nconst k="${trigger}";\n` });
+        const { ms, findings } = timedScan(dir, `${id} · ${title}`, LONG_KILL_MS);
+        const shown = JSON.stringify(findings);
+        assert.deepEqual(leakedPieces(shown, trigger), [], "sample no puede mostrar el secreto");
+        assert.deepEqual(leakedPieces(shown, block.slice(0, 200)), [], "sample no puede mostrar el bloque");
+        let branch = "exacto";
+        if (expect) {
+          const want = [...expect.map((r) => `${LONG_PATH}:1|${r}`), `${LONG_PATH}:2|${id}`].sort();
+          assert.deepEqual(findings.map(keyOf).sort(), want, `${id} · ${title}: el resultado debe ser exacto y sin scan-error: ${shown.slice(0, 2_000)}`);
+        } else {
+          branch = `rama ${unboundedBranch(findings, id, LONG_PATH, [`${LONG_PATH}:2|${id}`])}`;
+        }
+        assert.ok(ms < LONG_LIMIT_MS, `${id} · ${title}: la revisión tardó ${Math.round(ms)} ms; el límite es ${LONG_LIMIT_MS} ms`);
+        t.diagnostic(`${id} · ${title}: ${branch} · Node ${process.version} · ${Math.round(ms)} ms`);
+      });
+    }
+  }
+
+  // R4: the lookbehinds of anthropic-api-key and ai-provider-secret-key must stay linear on sk- and sk-ant- repeated.
+  const LOOKBEHIND_RUNS = [
+    ["sk- repeated up to 7 M characters", () => `sk${"-"}`.repeat(Math.ceil(LONG / 3)), ["ai-provider-secret-key"]],
+    ["sk-ant- repeated up to 7 M characters", () => `sk${"-ant-"}`.repeat(LONG / 7), ["anthropic-api-key", "ai-provider-secret-key"]],
+  ];
+  for (const [title, make, expect] of LOOKBEHIND_RUNS) {
+    test(`[EP00-TBR-019-CA1] R4: ${title} gives the exact result in under 7 s (the lookbehinds are not quadratic)`, (t) => {
+      const block = make();
+      assert.ok(block.length >= LONG, `autocomprobación: mide ${block.length} caracteres`);
+      const trigger = TRIGGER_BY_RULE["ai-provider-secret-key"]();
+      const { ms, findings } = timedScan(makeArtifact({ [LONG_PATH]: `${block}\nconst k="${trigger}";\n` }), title, LONG_KILL_MS);
+      const want = [...expect.map((r) => `${LONG_PATH}:1|${r}`), `${LONG_PATH}:2|ai-provider-secret-key`].sort();
+      assert.deepEqual(findings.map(keyOf).sort(), want, `${title}: el resultado debe ser exacto: ${JSON.stringify(findings).slice(0, 2_000)}`);
+      assert.deepEqual(leakedPieces(JSON.stringify(findings), trigger), [], "sample no puede mostrar el secreto");
+      assert.ok(ms < LONG_LIMIT_MS, `${title}: la revisión tardó ${Math.round(ms)} ms; el límite es ${LONG_LIMIT_MS} ms`);
+      t.diagnostic(`${title}: Node ${process.version} · ${Math.round(ms)} ms`);
+    });
+  }
+
+  // R6: a secret of another rule inside the long block, or glued right after it, is still found.
+  test("[EP00-TBR-019-CA1] R6: a ghp_ token in the middle of a 7 M sb_secret_ block gives both findings on line 1, with masked samples", (t) => {
+    const ghp = TRIGGER_BY_RULE["github-token"]();
+    const half = "a".repeat(LONG / 2);
+    const block = `sb_${"secret_"}${half}${ghp}${half}`;
+    const { ms, findings } = timedScan(makeArtifact({ [LONG_PATH]: `${block}\n` }), "ghp_ inside the block", LONG_KILL_MS);
+    assert.deepEqual(findings.map(keyOf).sort(), [`${LONG_PATH}:1|github-token`, `${LONG_PATH}:1|supabase-secret-key`], `se esperaban los dos hallazgos en la línea 1: ${JSON.stringify(findings).slice(0, 2_000)}`);
+    assert.deepEqual(leakedPieces(JSON.stringify(findings), ghp), [], "sample no puede mostrar el token");
+    assert.deepEqual(leakedPieces(JSON.stringify(findings), block.slice(0, 200)), [], "sample no puede mostrar el bloque");
+    assert.ok(ms < LONG_LIMIT_MS, `la revisión tardó ${Math.round(ms)} ms; el límite es ${LONG_LIMIT_MS} ms`);
+    t.diagnostic(`ghp_ dentro del bloque: Node ${process.version} · ${Math.round(ms)} ms`);
+  });
+
+  test("[EP00-TBR-019-CA1] R6: another rule glued right after a 7 M sb_secret_ block and the same rule on the next line are all found", (t) => {
+    const pg = triggerOf("postgres-url-with-password");
+    const sb = triggerOf("supabase-secret-key");
+    // The second sb_secret_ on line 1 is the same rule on the same line: one finding by design (one per rule and line).
+    const block = `sb_${"secret_"}${"a".repeat(LONG)}${pg} ${sb}`;
+    const { ms, findings } = timedScan(makeArtifact({ [LONG_PATH]: `${block}\nconst k="${sb}";\n` }), "a rule glued after the block", LONG_KILL_MS);
+    const want = [`${LONG_PATH}:1|supabase-secret-key`, `${LONG_PATH}:1|postgres-url-with-password`, `${LONG_PATH}:2|supabase-secret-key`].sort();
+    assert.deepEqual(findings.map(keyOf).sort(), want, `se esperaban todos los hallazgos: ${JSON.stringify(findings).slice(0, 2_000)}`);
+    for (const secret of [pg, sb, block.slice(0, 200)]) assert.deepEqual(leakedPieces(JSON.stringify(findings), secret), [], "sample no puede mostrar el secreto");
+    assert.ok(ms < LONG_LIMIT_MS, `la revisión tardó ${Math.round(ms)} ms; el límite es ${LONG_LIMIT_MS} ms`);
+    t.diagnostic(`regla pegada tras el bloque: Node ${process.version} · ${Math.round(ms)} ms`);
+  });
+});
+
+describe("[EP00-TBR-019-CA1] the CLI end to end on a 7 M block, with a 512 MB heap", () => {
+  test("[EP00-TBR-019-CA1] a 7 M sb_secret_ block exits 1 with a line naming the path and supabase-secret-key, no trace, no value, never ready to upload", (t) => {
+    const path = "browser/chunk-LONGKEY.js";
+    const r = runNode([HEAP_FLAG], ["--dir", makeArtifact({ [path]: `${"sb_" + "secret_"}${"a".repeat(LONG)}\n` })]);
+    assert.doesNotMatch(r.output, OOM_RE, `la revisión no debe quedarse sin memoria\n${r.output.slice(0, 2_000)}`);
+    assertFinding(r, path, "supabase-secret-key", 1);
+    assert.doesNotMatch(r.output, /scan-error/, `con el rango acotado no debe salir scan-error\n${r.output.slice(0, 2_000)}`);
+    assert.ok(!r.output.includes("a".repeat(MAX_SHOWN + 1)), "la salida no puede mostrar el valor");
+    assert.ok(r.ms < CHILD_TIMEOUT_MS, `la corrida tardó ${Math.round(r.ms)} ms`);
+    t.diagnostic(`CLI sb_secret_ 7 M (heap 512 MB): Node ${process.version} · ${Math.round(r.ms)} ms`);
+  });
+
+  test("[EP00-TBR-019-CA1] AJ-6: a 7 M BEGIN block with no secret gives exactly branch A (exit 0, ready to upload) or branch B (exit 1, one scan-error line)", (t) => {
+    const path = "browser/chunk-LONGBEGIN.js";
+    const dir = makeArtifact({ [path]: `${BEGIN}${"A ".repeat(LONG / 2)}\n` });
+    const files = Object.keys(CLEAN_FILES()).length + 1;
+    const r = runNode([HEAP_FLAG], ["--dir", dir]);
+    assert.doesNotMatch(r.output, OOM_RE, `la revisión no debe quedarse sin memoria\n${r.output.slice(0, 2_000)}`);
+    assert.doesNotMatch(r.output, STACK_TRACE_RE, `la revisión no debe terminar con una traza\n${r.output.slice(0, 2_000)}`);
+    assert.deepEqual(leakedPieces(r.output, `${BEGIN}${"A ".repeat(8)}`), [], "la salida no puede mostrar el bloque");
+    let branch;
+    if (r.status === 0) {
+      branch = "A";
+      assert.equal(Number(CLEAN_RE.exec(r.stdout)?.[1]), files, `rama A: se esperaba «0 hallazgos en ${files} archivo(s) …; listo para subir»\n${r.output.slice(0, 2_000)}`);
+      assert.deepEqual(errorLines(r.stderr), [], `rama A: no debe haber hallazgos\n${r.output.slice(0, 2_000)}`);
+    } else {
+      branch = "B";
+      assert.equal(r.status, 1, `rama B: se esperaba el código 1\n${r.output.slice(0, 2_000)}`);
+      assert.deepEqual(errorLines(r.stderr), [scanErrorLine(path, "private-key-block", "RangeError")], `rama B: se esperaba una sola línea de scan-error de private-key-block, sin «:línea»\n${r.output.slice(0, 2_000)}`);
+      assert.match(r.stderr, new RegExp(`^check-artifact: 1 hallazgo\\(s\\) en ${files} archivo\\(s\\) de `, "m"), `rama B: falta el resumen «1 hallazgo(s) en …»\n${r.output.slice(0, 2_000)}`);
+      assert.doesNotMatch(r.output, /listo para subir/, `rama B: nunca está listo para subir\n${r.output.slice(0, 2_000)}`);
+    }
+    assert.ok(r.ms < CHILD_TIMEOUT_MS, `la corrida tardó ${Math.round(r.ms)} ms`);
+    t.diagnostic(`CLI BEGIN 7 M sin secreto (heap 512 MB): rama ${branch} · Node ${process.version} · ${Math.round(r.ms)} ms`);
+  });
+});
+
+describe("[EP00-TBR-019-CA1] margin over CA1: 16 M characters", () => {
+  const BIG = 16_000_000;
+  const BIG_LIMIT_MS = 16_000; // the [V-1] pace, 1 s per million characters
+  test("[EP00-TBR-019-CA1] sb_secret_ followed by 16 M characters gives the exact result", (t) => {
+    const trigger = TRIGGER_BY_RULE["supabase-secret-key"]();
+    const { ms, findings } = timedScan(makeArtifact({ [LONG_PATH]: `sb_${"secret_"}${"a".repeat(BIG)}\nconst k="${trigger}";\n` }), "sb_secret_ 16 M", LONG_KILL_MS);
+    assert.deepEqual(findings.map(keyOf).sort(), [`${LONG_PATH}:1|supabase-secret-key`, `${LONG_PATH}:2|supabase-secret-key`], `el resultado debe ser exacto: ${JSON.stringify(findings).slice(0, 2_000)}`);
+    assert.ok(ms < BIG_LIMIT_MS, `la revisión tardó ${Math.round(ms)} ms; el límite es ${BIG_LIMIT_MS} ms`);
+    t.diagnostic(`sb_secret_ 16 M: Node ${process.version} · ${Math.round(ms)} ms`);
+  });
+
+  test("[EP00-TBR-019-CA1] AJ-6: BEGIN followed by 8 M words of one letter gives exactly branch A or branch B", (t) => {
+    const trigger = TRIGGER_BY_RULE["private-key-block"]();
+    const { ms, findings } = timedScan(makeArtifact({ [LONG_PATH]: `${BEGIN}${"A ".repeat(BIG / 2)}\nconst k="${trigger}";\n` }), "BEGIN 16 M", LONG_KILL_MS);
+    const branch = unboundedBranch(findings, "private-key-block", LONG_PATH, [`${LONG_PATH}:2|private-key-block`]);
+    assert.deepEqual(leakedPieces(JSON.stringify(findings), trigger), [], "sample no puede mostrar el secreto");
+    assert.ok(ms < BIG_LIMIT_MS, `la revisión tardó ${Math.round(ms)} ms; el límite es ${BIG_LIMIT_MS} ms`);
+    t.diagnostic(`BEGIN 16 M: rama ${branch} · Node ${process.version} · ${Math.round(ms)} ms`);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// CA2 · no regression. The 6 [V-3] patterns as they stand before the fix, copied on purpose (R5): any later change of
+// those rules shows in this diff too (RG-1). They are patterns, not secrets.
+// ---------------------------------------------------------------------------------------------
+const V3_CURRENT_PATTERNS = {
+  "supabase-secret-key": "\\bsb_secret_[A-Za-z0-9_-]{20,}",
+  "github-token": "(?:gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{60,})",
+  "stripe-secret-key": "[sr]k_(?:live|test)_[0-9A-Za-z]{20,}",
+  "slack-token": "\\bxox[abposr]-[0-9A-Za-z-]{10,}",
+  "anthropic-api-key": "(?<![A-Za-z0-9])sk-ant-[A-Za-z0-9_-]{32,}",
+  "ai-provider-secret-key": "(?<![A-Za-z0-9])sk-(?!ant-[A-Za-z0-9_-]{32})[A-Za-z0-9_-]{32,}",
+};
+// AJ-5 · the 2 rules the PO kept unbounded, with their current text, assembled at runtime as in the self-checks above.
+const UNBOUNDED_CURRENT_PATTERNS = () => ({
+  "private-key-block": `${DASHES}${"BEG" + "IN"} (?:[A-Z0-9]+ )*PRIV${"ATE"} KEY(?: BLOCK)?${DASHES}`,
+  "postgres-url-with-password": "postgres(?:ql)?://[^\\s:@/'\"`]+:[^\\s@/'\"`]+@",
+});
+// The real list with the 6 [V-3] patterns put back to their current text; nothing else changes.
+function listWithCurrentPatterns(list) {
+  const copy = structuredClone(list);
+  for (const rule of copy.contents) if (rule.id in V3_CURRENT_PATTERNS) rule.pattern = V3_CURRENT_PATTERNS[rule.id];
+  return copy;
+}
+const flatFindings = (findings) => findings.map((f) => `${f.path}:${f.line}|${f.rule}|${f.sample}`);
+function assertSameFindings(withReal, withCurrent, what) {
+  const first = Array.from({ length: Math.max(withReal.length, withCurrent.length) }, (_, i) => i).find((i) => withReal[i] !== withCurrent[i]);
+  assert.equal(first, undefined, `${what}: la lista real y los patrones actuales deben dar los mismos hallazgos (${withReal.length} frente a ${withCurrent.length}); primera diferencia en ${first}: lista real ${withReal[first]} · patrones actuales ${withCurrent[first]}`);
+}
+
+// Seeded corpus (mulberry32): the prefixes of the 6 [V-3] rules with bodies of N-1, N, N+1, 2N, 100 and 1 000
+// characters, interior prefixes, leading characters that test the boundaries, several per line, LF and CRLF.
+const ALNUM = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+const V3_CORPUS_RULES = [
+  { id: "supabase-secret-key", prefixes: ["sb_" + "secret_"], alphabet: `${ALNUM}_-`, n: 20 },
+  { id: "github-token", prefixes: ["github_" + "pat_", "gh" + "p_"], alphabet: `${ALNUM}_`, n: 60 },
+  { id: "stripe-secret-key", prefixes: ["sk", "rk"].flatMap((a) => ["_live_", "_test_"].map((b) => a + b)), alphabet: ALNUM, n: 20 },
+  { id: "slack-token", prefixes: [..."abposr"].map((c) => `xo${"x"}${c}-`), alphabet: `${ALNUM}-`, n: 10 },
+  { id: "anthropic-api-key", prefixes: ["sk" + "-ant-"], alphabet: `${ALNUM}_-`, n: 32 },
+  { id: "ai-provider-secret-key", prefixes: ["sk" + "-"], alphabet: `${ALNUM}_-`, n: 32 },
+];
+const CORPUS_SEED = 19;
+const CORPUS_MAX_CHARS = 1_000_000;
+const CORPUS_FILES = 4;
+const INTERIOR = ["sk" + "-", "-xo" + "xb-", "github_" + "pat_", "sb_" + "secret_", "sk" + "-ant-", "sk" + "_live_", "gh" + "p_"];
+const CUTS = [".", " ", "/", ":", "\"", "+", "@", "!", "\t"];
+const LEADS = ["", "", " ", "\"", "=", "x", "_", "-", "9", "/", "."];
+const SEPARATORS = [" ", " ", "\n", "\r\n", "", ".", "\"", ",", ";", "x"];
+function seededRandom(seed) {
+  let s = seed >>> 0;
+  return () => {
+    s = (s + 0x6d2b79f5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function differentialCorpus() {
+  const random = seededRandom(CORPUS_SEED);
+  const pick = (items) => items[Math.floor(random() * items.length)];
+  const parts = Array.from({ length: CORPUS_FILES }, () => []);
+  let strings = 0;
+  let total = 0;
+  for (;;) {
+    const rule = pick(V3_CORPUS_RULES);
+    const length = random() < 0.01 ? 1_000 : pick([rule.n - 1, rule.n, rule.n + 1, 2 * rule.n, 100]);
+    let body = "";
+    while (body.length < length) {
+      const r = random();
+      body += r < 0.9 ? pick(rule.alphabet) : r < 0.96 ? pick(INTERIOR) : pick(CUTS);
+    }
+    const piece = `${pick(LEADS)}${pick(rule.prefixes)}${body.slice(0, length)}${pick(SEPARATORS)}`;
+    if (total + piece.length > CORPUS_MAX_CHARS) break;
+    parts[strings % CORPUS_FILES].push(piece);
+    total += piece.length;
+    strings++;
+  }
+  return { files: Object.fromEntries(parts.map((p, i) => [`browser/diff-${i}.js`, p.join("")])), strings, total };
+}
+
+describe("[EP00-TBR-019-CA2] no regression in what the list detects", () => {
+  test("[EP00-TBR-019-CA2] AJ-5: private-key-block and postgres-url-with-password keep their current pattern, character for character", () => {
+    const list = realList();
+    for (const [id, pattern] of Object.entries(UNBOUNDED_CURRENT_PATTERNS())) {
+      const rule = (list.contents ?? []).find((r) => r.id === id);
+      assert.equal(rule?.kind, "regex", `${id} debe seguir siendo una regla regex`);
+      assert.equal(rule?.pattern, pattern, `${id}: el PO rechazó [V-4]; su patrón no cambia`);
+    }
+  });
+
+  test("[EP00-TBR-019-CA2] self-check: the 6 [V-3] rules exist, their current text compiles, and the seeded corpus stays under 1 MB with about 20 000 strings", () => {
+    const list = realList();
+    for (const [id, pattern] of Object.entries(V3_CURRENT_PATTERNS)) {
+      assert.equal((list.contents ?? []).find((r) => r.id === id)?.kind, "regex", `${id} debe existir como regla regex en la lista real`);
+      assert.doesNotThrow(() => new RegExp(pattern, "gu"), `${id}: el patrón actual debe compilar`);
+    }
+    const copy = listWithCurrentPatterns(list);
+    const strip = (l) => JSON.stringify(l.contents.map(({ pattern, ...rest }) => rest));
+    assert.equal(strip(copy), strip(list), "la copia solo cambia los patrones de [V-3]");
+    assert.deepEqual({ ...copy, contents: null }, { ...list, contents: null }, "la copia no cambia names ni exceptions");
+    const corpus = differentialCorpus();
+    assert.ok(corpus.total <= CORPUS_MAX_CHARS, `el corpus mide ${corpus.total} caracteres; como mucho 1 MB`);
+    assert.ok(corpus.strings >= 10_000, `el corpus tiene ${corpus.strings} cadenas; deben ser del orden de 20 000`);
+    assert.equal(JSON.stringify(differentialCorpus()), JSON.stringify(corpus), "el corpus debe ser el mismo en cada corrida (semilla fija)");
+  });
+
+  test("[EP00-TBR-019-CA2] R5: the seeded corpus gives the same findings (rule, path, line, sample) with the real list and with the current [V-3] patterns", (t) => {
+    const scanArtifact = exported("scanArtifact");
+    const list = exported("loadPatternList")(LIST);
+    const corpus = differentialCorpus();
+    const dir = makeArtifact(corpus.files, { clean: false });
+    const withReal = flatFindings(scanArtifact(dir, list));
+    const withCurrent = flatFindings(scanArtifact(dir, listWithCurrentPatterns(list)));
+    const perRule = Object.fromEntries(V3_CORPUS_RULES.map(({ id }) => [id, withCurrent.filter((k) => k.includes(`|${id}|`)).length]));
+    for (const [id, count] of Object.entries(perRule)) assert.ok(count >= 100, `autocomprobación: el corpus da ${count} hallazgos de ${id}; debe ejercitar cada regla`);
+    assertSameFindings(withReal, withCurrent, "corpus diferencial");
+    t.diagnostic(`corpus: ${corpus.strings} cadenas, ${corpus.total} caracteres, ${withCurrent.length} hallazgos (${JSON.stringify(perRule)})`);
+  });
+
+  test("[EP00-TBR-019-CA2] R5: sk-ant- and sk- keys of every length around the minimum, alone and glued to another key, give today's result in both rules", () => {
+    const scanArtifact = exported("scanArtifact");
+    const list = exported("loadPatternList")(LIST);
+    const sk = (n) => "sk" + "-" + "Synth" + "0".repeat(n - 5);
+    const keys = [
+      ...[28, 31].map((n) => [skAnt(n), "ai-provider-secret-key"]),
+      ...[32, 33, 40, 100, 1_000].map((n) => [skAnt(n), "anthropic-api-key"]),
+      [sk(31), null],
+      ...[32, 33, 100].map((n) => [sk(n), "ai-provider-secret-key"]),
+    ];
+    const ghp = TRIGGER_BY_RULE["github-token"]();
+    const sb = triggerOf("supabase-secret-key");
+    const alone = keys.map(([key]) => `const k="${key}";`);
+    const glued = keys.flatMap(([key], i) => [`const k="${key}${keys[(i + 1) % keys.length][0]}";`, `const k="${ghp}${key}";`, `const k="${key}${sb}";`, `const k="${key}-${key}";`]);
+    const dir = makeArtifact({ [MAIN_JS]: `${[...alone, ...glued].join("\n")}\n` }, { clean: false });
+    const findings = scanArtifact(dir, list);
+    const aloneWant = keys.flatMap(([, rule], i) => (rule ? [`${MAIN_JS}:${i + 1}|${rule}`] : []));
+    assert.deepEqual(findings.filter((f) => f.line <= alone.length).map(keyOf).sort(), aloneWant.sort(), `cada llave sola debe dar el hallazgo de hoy: ${JSON.stringify(findings.filter((f) => f.line <= alone.length))}`);
+    const withCurrent = scanArtifact(dir, listWithCurrentPatterns(list));
+    assertSameFindings(flatFindings(findings), flatFindings(withCurrent), "llaves sk- y sk-ant-");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// CA3 · unforeseen errors while scanning (design §8.4, DEC-0020 §2).
+// ---------------------------------------------------------------------------------------------
+function throwingRule(id, kind, field, makeError) {
+  const rule = { id, kind, reason: "regla sintética que falla al leerse" };
+  Object.defineProperty(rule, field, { enumerable: true, get() { throw makeError(); } });
+  return rule;
+}
+function namedError(name) {
+  const error = new Error(SENTINEL);
+  error.name = name;
+  return error;
+}
+// One rule of the real list whose pattern the preload targets; its text is not touched by [V-3].
+const PRELOAD_RULE = "vercel-token-env";
+// mode "always": every exec of that pattern throws. mode "second": the first exec of each scan returns as usual and the
+// next one throws, so the first match is delivered and the error comes on the second (design §12.4). Wrapping
+// RegExp.prototype.exec reaches String.prototype.matchAll as well as any exec loop.
+const execPreload = (mode) => `
+import { readFileSync } from "node:fs";
+const list = JSON.parse(readFileSync(${JSON.stringify(LIST)}, "utf8"));
+const source = new RegExp(list.contents.find((r) => r.id === ${JSON.stringify(PRELOAD_RULE)}).pattern, "u").source;
+const exec = RegExp.prototype.exec;
+RegExp.prototype.exec = function (s) {
+  if (this.source === source && (${JSON.stringify(mode)} === "always" || this.lastIndex !== 0)) throw new RangeError(${JSON.stringify(SENTINEL)});
+  return exec.call(this, s);
+};
+`;
+// Makes one builtin function throw when its argument number `argIndex` ends with `target`, and pushes the change to the
+// named ESM exports with module.syncBuiltinESMExports(). With `errorCode` it throws an Error with that code (like a
+// failing file system call); without it, a RangeError.
+const builtinPreload = (moduleName, fn, argIndex, target, errorCode) => `
+import mod from ${JSON.stringify(moduleName)};
+import { syncBuiltinESMExports } from "node:module";
+const original = mod[${JSON.stringify(fn)}];
+mod[${JSON.stringify(fn)}] = function (...args) {
+  if (String(args[${argIndex}]).endsWith(${JSON.stringify(target)})) {
+    const error = new ${errorCode ? "Error" : "RangeError"}(${JSON.stringify(SENTINEL)});
+    ${errorCode ? `error.code = ${JSON.stringify(errorCode)};` : ""}
+    throw error;
+  }
+  return original.apply(this, args);
+};
+syncBuiltinESMExports();
+`;
+const CA3_TARGET = "browser/chunk-SCANERR.js";
+const CA3_OTHER = "browser/chunk-OTHER.js";
+const ca3Files = () => ({
+  [CA3_TARGET]: ["/* synthetic */", `const t="${TRIGGER_BY_RULE[PRELOAD_RULE]()}";`, `const k="${triggerOf("supabase-secret-key")}";`, `const u="${TRIGGER_BY_RULE[PRELOAD_RULE]()}";`].join("\n") + "\n",
+  [CA3_OTHER]: `const u="${triggerOf("postgres-url-with-password")}";\n`,
+  "browser/vercel.json": "{}\n",
+});
+// A failing review that fails closed and leaks nothing: exit 1, no trace, no sentinel, no planted value, never ready.
+function assertClosedAndSilent(r) {
+  assert.equal(r.status, 1, `la revisión debe fallar cerrada con el código 1\n${r.output.slice(0, 2_000)}`);
+  assert.doesNotMatch(r.output, STACK_TRACE_RE, `no debe terminar con una traza\n${r.output.slice(0, 2_000)}`);
+  assert.ok(!r.output.includes(SENTINEL), `la salida no puede mostrar error.message (centinela)\n${r.output.slice(0, 2_000)}`);
+  for (const secret of [triggerOf("supabase-secret-key"), triggerOf("postgres-url-with-password")]) assert.deepEqual(leakedPieces(r.output, secret), [], "la salida no puede mostrar el valor");
+  assert.doesNotMatch(r.output, /listo para subir/, `nunca está listo para subir\n${r.output.slice(0, 2_000)}`);
+}
+
+describe("[EP00-TBR-019-CA3] an unforeseen error while scanning fails closed with the rule and the file, never the value", () => {
+  test("[EP00-TBR-019-CA3] self-check: the scan-error sample is the Spanish text of [V-2]", () => {
+    assert.equal(scanErrorSample("supabase-secret-key"), "no se pudo revisar con la regla «supabase-secret-key» (RangeError); el archivo no pasa la revisión");
+    assert.equal(scanErrorLine("browser/chunk-X.js", "supabase-secret-key", "RangeError"), "ERROR  browser/chunk-X.js  · scan-error · no se pudo revisar con la regla «supabase-secret-key» (RangeError); el archivo no pasa la revisión");
+  });
+
+  test("[EP00-TBR-019-CA3] in process: rules that throw give one scan-error per rule and file, with line 0, the filtered error name and no message, and every other finding stays", () => {
+    const scanArtifact = exported("scanArtifact");
+    const real = realList();
+    const byId = (id) => real.contents.find((r) => r.id === id);
+    const THROWING = [
+      ["synthetic-throwing-pattern", "regex", "pattern", () => new TypeError(SENTINEL), "TypeError"],
+      ["synthetic-throwing-role", "jwt-role", "role", () => new RangeError(SENTINEL), "RangeError"],
+      ["synthetic-odd-error-name", "regex", "pattern", () => namedError("Odd name 1"), "Error"],
+      ["synthetic-long-error-name", "regex", "pattern", () => namedError("Q".repeat(41)), "Error"],
+      ["synthetic-max-error-name", "regex", "pattern", () => namedError("Q".repeat(40)), "Q".repeat(40)],
+    ];
+    const throwing = THROWING.map(([id, kind, field, make]) => throwingRule(id, kind, field, make));
+    const list = {
+      version: 1,
+      names: real.names.filter((r) => r.id === "vercel-config"),
+      contents: [byId("supabase-secret-key"), throwing[0], byId("postgres-url-with-password"), throwing[1], throwing[2], throwing[3], throwing[4], byId(PRELOAD_RULE)],
+      exceptions: [],
+    };
+    // Every file carries a service_role JWT, so a jwt-role rule must read its role on each one.
+    const sr = triggerOf("service-role-jwt");
+    const files = {
+      "browser/a.js": `const t="${sr}";\nconst k="${triggerOf("supabase-secret-key")}";\nconst v="${TRIGGER_BY_RULE[PRELOAD_RULE]()}";\n`,
+      "browser/b.js": `const u="${triggerOf("postgres-url-with-password")}";\nconst t="${sr}";\n`,
+      "browser/vercel.json": `{"t":"${sr}"}\n`,
+    };
+    let findings;
+    assert.doesNotThrow(() => { findings = scanArtifact(makeArtifact(files, { clean: false }), list); }, "scanArtifact no debe lanzar el error de una regla: debe convertirlo en scan-error");
+    const key = (f) => `${keyOf(f)}${f.rule === "scan-error" ? `|${f.sample}` : ""}`;
+    const want = [
+      "browser/a.js:2|supabase-secret-key",
+      `browser/a.js:3|${PRELOAD_RULE}`,
+      "browser/b.js:1|postgres-url-with-password",
+      "browser/vercel.json:0|vercel-config",
+      ...Object.keys(files).flatMap((path) => THROWING.map(([id, , , , type]) => `${path}:0|scan-error|${scanErrorSample(id, type)}`)),
+    ].sort();
+    assert.deepEqual(findings.map(key).sort(), want, `se esperaba un scan-error por regla y archivo y el resto de hallazgos: ${JSON.stringify(findings)}`);
+    for (const f of findings) assert.deepEqual(Object.keys(f).sort(), ["line", "path", "rule", "sample"], `forma del hallazgo: ${JSON.stringify(f)}`);
+    assert.ok(!JSON.stringify(findings).includes(SENTINEL), "sample no puede mostrar error.message");
+  });
+
+  test("[EP00-TBR-019-CA3] CLI: a RangeError on every exec of one rule gives one scan-error line per file, the rest of the findings and the summary, with no trace and no message", () => {
+    const dir = makeArtifact(ca3Files());
+    const paths = Object.keys({ ...CLEAN_FILES(), ...ca3Files() });
+    const r = runWithPreload(execPreload("always"), ["--dir", dir]);
+    assertClosedAndSilent(r);
+    const lines = errorLines(r.stderr);
+    for (const path of paths) assert.equal(lines.filter((l) => l === scanErrorLine(path, PRELOAD_RULE, "RangeError")).length, 1, `${path}: se esperaba una línea de scan-error de ${PRELOAD_RULE}\nstderr: ${r.stderr.slice(0, 3_000)}`);
+    assert.ok(names(r.stderr, CA3_TARGET, "supabase-secret-key", 3), `falta el hallazgo de supabase-secret-key en ${CA3_TARGET}:3\nstderr: ${r.stderr.slice(0, 3_000)}`);
+    assert.ok(names(r.stderr, CA3_OTHER, "postgres-url-with-password", 1), `falta el hallazgo de postgres-url-with-password en ${CA3_OTHER}:1\nstderr: ${r.stderr.slice(0, 3_000)}`);
+    assert.ok(names(r.stderr, "browser/vercel.json", "vercel-config"), `falta el hallazgo de vercel-config\nstderr: ${r.stderr.slice(0, 3_000)}`);
+    assert.ok(!lines.some((l) => l.includes(`· ${PRELOAD_RULE} ·`)), `con el error no queda ningún hallazgo suelto de ${PRELOAD_RULE}\nstderr: ${r.stderr.slice(0, 3_000)}`);
+    assert.equal(Number(SUMMARY_RE.exec(r.stderr)?.[1]), paths.length + 3, `el resumen debe contar ${paths.length + 3} hallazgos\nstderr: ${r.stderr.slice(0, 3_000)}`);
+    assert.equal(lines.length, paths.length + 3, `se esperaban ${paths.length + 3} líneas ERROR\nstderr: ${r.stderr.slice(0, 3_000)}`);
+  });
+
+  test("[EP00-TBR-019-CA3] CLI §12.3: when the error comes on the second match, the first match stays, plus the scan-error of the rule and the rest of the findings", () => {
+    const dir = makeArtifact(ca3Files());
+    const r = runWithPreload(execPreload("second"), ["--dir", dir]);
+    assertClosedAndSilent(r);
+    const lines = errorLines(r.stderr);
+    assert.ok(names(r.stderr, CA3_TARGET, PRELOAD_RULE, 2), `la coincidencia anterior al error (${CA3_TARGET}:2) debe conservarse\nstderr: ${r.stderr.slice(0, 3_000)}`);
+    assert.ok(!names(r.stderr, CA3_TARGET, PRELOAD_RULE, 4), `la coincidencia posterior al error no sale (la absorbe el scan-error)\nstderr: ${r.stderr.slice(0, 3_000)}`);
+    assert.deepEqual(lines.filter((l) => l.includes("· scan-error ·")), [scanErrorLine(CA3_TARGET, PRELOAD_RULE, "RangeError")], `se esperaba un único scan-error, el del archivo con dos coincidencias\nstderr: ${r.stderr.slice(0, 3_000)}`);
+    assert.ok(names(r.stderr, CA3_TARGET, "supabase-secret-key", 3), `falta el hallazgo de supabase-secret-key en ${CA3_TARGET}:3\nstderr: ${r.stderr.slice(0, 3_000)}`);
+    assert.ok(names(r.stderr, CA3_OTHER, "postgres-url-with-password", 1), `falta el hallazgo de postgres-url-with-password\nstderr: ${r.stderr.slice(0, 3_000)}`);
+    assert.ok(names(r.stderr, "browser/vercel.json", "vercel-config"), `falta el hallazgo de vercel-config\nstderr: ${r.stderr.slice(0, 3_000)}`);
+    assert.equal(Number(SUMMARY_RE.exec(r.stderr)?.[1]), 5, `el resumen debe contar 5 hallazgos\nstderr: ${r.stderr.slice(0, 3_000)}`);
+  });
+
+  test("[EP00-TBR-019-CA3] R7: lstatSync failing on one entry gives unreadable on that path and the rest is still reviewed", () => {
+    const target = "browser/chunk-LSTAT.js";
+    const dir = makeArtifact({ [target]: `const k="${triggerOf("supabase-secret-key")}";\n`, [CA3_OTHER]: ca3Files()[CA3_OTHER], "browser/vercel.json": "{}\n" });
+    const r = runWithPreload(builtinPreload("node:fs", "lstatSync", 0, "chunk-LSTAT.js", "EACCES"), ["--dir", dir]);
+    assertClosedAndSilent(r);
+    assert.ok(errorLines(r.stderr).includes(`ERROR  ${target}  · unreadable · no se pudo leer la entrada`), `se esperaba «ERROR  ${target}  · unreadable · no se pudo leer la entrada»\nstderr: ${r.stderr.slice(0, 3_000)}`);
+    assert.ok(names(r.stderr, CA3_OTHER, "postgres-url-with-password", 1), `el resto debe revisarse (postgres-url-with-password en ${CA3_OTHER})\nstderr: ${r.stderr.slice(0, 3_000)}`);
+    assert.ok(names(r.stderr, "browser/vercel.json", "vercel-config"), `el resto debe revisarse (vercel-config)\nstderr: ${r.stderr.slice(0, 3_000)}`);
+    assert.match(r.stderr, SUMMARY_RE, `falta el resumen\nstderr: ${r.stderr.slice(0, 3_000)}`);
+  });
+
+  test("[EP00-TBR-019-CA3] final net: an error outside the protected steps exits 1 with «error inesperado al revisar», the error name, no trace and no message", () => {
+    const dir = makeArtifact({ "browser/chunk-NET.js": `const k="${triggerOf("supabase-secret-key")}";\n` });
+    const r = runWithPreload(builtinPreload("node:path", "relative", 1, "chunk-NET.js"), ["--dir", dir]);
+    assertClosedAndSilent(r);
+    const m = /^check-artifact: error inesperado al revisar (.+) \(RangeError\); la revisión falla y no se sube nada$/m.exec(r.output);
+    assert.ok(m, `se esperaba «check-artifact: error inesperado al revisar <dir> (RangeError); la revisión falla y no se sube nada»\n${r.output.slice(0, 3_000)}`);
+    assert.ok(m[1].endsWith(dir.split("/").pop()), `el mensaje debe nombrar la carpeta revisada: ${m[1]}`);
+    assert.doesNotMatch(r.output, /0 hallazgos/, `la red final nunca da un resultado limpio\n${r.output.slice(0, 2_000)}`);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// T3 · edge cases added in the quality review, after reading the fix (black box on CA1 and CA3; only added).
+// ---------------------------------------------------------------------------------------------
+// Like execPreload("always"), but every exec of the patterns of several rules throws a RangeError with the sentinel.
+const execPreloadRules = (ids) => `
+import { readFileSync } from "node:fs";
+const list = JSON.parse(readFileSync(${JSON.stringify(LIST)}, "utf8"));
+const ids = ${JSON.stringify(ids)};
+const sources = new Set(list.contents.filter((r) => ids.includes(r.id)).map((r) => new RegExp(r.pattern, "u").source));
+const exec = RegExp.prototype.exec;
+RegExp.prototype.exec = function (s) {
+  if (sources.has(this.source)) throw new RangeError(${JSON.stringify(SENTINEL)});
+  return exec.call(this, s);
+};
+`;
+
+describe("[EP00-TBR-019-CA1][EP00-TBR-019-CA3] T3 edge cases: CRLF, several scan-errors in one run, the file count, odd thrown values", () => {
+  test("[EP00-TBR-019-CA1] CRLF: a 7 M sb_secret_ block ended by CRLF gives the exact result on lines 1 and 2, with no scan-error, in under 7 s", (t) => {
+    const trigger = TRIGGER_BY_RULE["supabase-secret-key"]();
+    const { ms, findings } = timedScan(makeArtifact({ [LONG_PATH]: `sb_${"secret_"}${"a".repeat(LONG)}\r\nconst k="${trigger}";\r\n` }), "sb_secret_ 7 M CRLF", LONG_KILL_MS);
+    assert.deepEqual(findings.map(keyOf).sort(), [`${LONG_PATH}:1|supabase-secret-key`, `${LONG_PATH}:2|supabase-secret-key`], `con CRLF el resultado debe ser exacto: ${JSON.stringify(findings).slice(0, 2_000)}`);
+    assert.ok(!JSON.stringify(findings).includes("\\r"), "sample no puede arrastrar el retorno de carro");
+    assert.ok(ms < LONG_LIMIT_MS, `la revisión tardó ${Math.round(ms)} ms; el límite es ${LONG_LIMIT_MS} ms`);
+    t.diagnostic(`sb_secret_ 7 M CRLF: Node ${process.version} · ${Math.round(ms)} ms`);
+  });
+
+  test("[EP00-TBR-019-CA1] R6 with a real V8 error: a 7 M BEGIN block with a secret of another rule on the next line gives branch A or B, and that secret is found in both", (t) => {
+    const sb = triggerOf("supabase-secret-key");
+    const { ms, findings } = timedScan(makeArtifact({ [LONG_PATH]: `${BEGIN}${"A ".repeat(LONG / 2)}\r\nconst k="${sb}";\r\n` }), "BEGIN 7 M + sb_secret_", LONG_KILL_MS);
+    const got = findings.map(keyOf).sort();
+    const a = [`${LONG_PATH}:2|supabase-secret-key`];
+    const b = [`${LONG_PATH}:0|scan-error`, `${LONG_PATH}:2|supabase-secret-key`];
+    const branch = sameList(got, a) ? "A" : sameList(got, b) && findings.find((f) => f.rule === "scan-error").sample === scanErrorSample("private-key-block") ? "B" : null;
+    assert.ok(branch, `se esperaba la rama A (${a.join(", ")}) o la B (${b.join(", ")}, con el scan-error de private-key-block); llegó: ${JSON.stringify(findings).slice(0, 2_000)}`);
+    assert.deepEqual(leakedPieces(JSON.stringify(findings), sb), [], "sample no puede mostrar el secreto");
+    assert.ok(ms < LONG_LIMIT_MS, `la revisión tardó ${Math.round(ms)} ms; el límite es ${LONG_LIMIT_MS} ms`);
+    t.diagnostic(`BEGIN 7 M + sb_secret_ en la línea 2 (CRLF): rama ${branch} · Node ${process.version} · ${Math.round(ms)} ms`);
+  });
+
+  test("[EP00-TBR-019-CA3] CLI: two rules failing on every CRLF file give one scan-error per rule and file, the other findings on their lines, and a summary that counts files, not findings", () => {
+    const ids = ["vercel-token-env", "supabase-service-role-env"];
+    const extra = {
+      "browser/chunk-CRLF-A.js": ["/* synthetic */", `const t="${TRIGGER_BY_RULE["vercel-token-env"]()}";`, `const k="${triggerOf("supabase-secret-key")}";`, `const s="${TRIGGER_BY_RULE["supabase-service-role-env"]()}";`].join("\r\n") + "\r\n",
+      "browser/chunk-CRLF-B.js": `/* synthetic */\r\nconst u="${triggerOf("postgres-url-with-password")}";\r\n`,
+    };
+    const paths = Object.keys({ ...CLEAN_FILES(), ...extra });
+    const r = runWithPreload(execPreloadRules(ids), ["--dir", makeArtifact(extra)]);
+    assertClosedAndSilent(r);
+    const lines = errorLines(r.stderr);
+    for (const path of paths) {
+      for (const id of ids) assert.equal(lines.filter((l) => l === scanErrorLine(path, id, "RangeError")).length, 1, `${path}: se esperaba exactamente una línea de scan-error de ${id}\nstderr: ${r.stderr.slice(0, 3_000)}`);
+    }
+    assert.ok(names(r.stderr, "browser/chunk-CRLF-A.js", "supabase-secret-key", 3), `con CRLF, supabase-secret-key debe salir en la línea 3\nstderr: ${r.stderr.slice(0, 3_000)}`);
+    assert.ok(names(r.stderr, "browser/chunk-CRLF-B.js", "postgres-url-with-password", 2), `con CRLF, postgres-url-with-password debe salir en la línea 2\nstderr: ${r.stderr.slice(0, 3_000)}`);
+    const want = paths.length * ids.length + 2;
+    assert.equal(lines.length, want, `se esperaban ${want} líneas ERROR\nstderr: ${r.stderr.slice(0, 3_000)}`);
+    assert.ok(!r.stderr.includes("\r"), "la salida no puede arrastrar retornos de carro del artefacto");
+    assert.equal(Number(SUMMARY_RE.exec(r.stderr)?.[1]), want, `el resumen debe contar ${want} hallazgos\nstderr: ${r.stderr.slice(0, 3_000)}`);
+    assert.equal(Number(SUMMARY_FILES_RE.exec(r.stderr)?.[1]), paths.length, `«N archivo(s)» cuenta archivos (${paths.length}), no hallazgos ni scan-error\nstderr: ${r.stderr.slice(0, 3_000)}`);
+  });
+
+  test("[EP00-TBR-019-CA3] in process: a thrown value that is not an Error (text, null, undefined, a plain object) still gives a scan-error with the type «Error» and never the thrown text", () => {
+    const scanArtifact = exported("scanArtifact");
+    const THROWN = [
+      ["synthetic-throws-text", () => `${SENTINEL} text`],
+      ["synthetic-throws-null", () => null],
+      ["synthetic-throws-undefined", () => undefined],
+      ["synthetic-throws-object", () => ({ name: `${SENTINEL} name`, message: SENTINEL })],
+    ];
+    const list = { version: 1, names: [], contents: [...THROWN.map(([id, make]) => throwingRule(id, "regex", "pattern", make)), realList().contents.find((r) => r.id === "supabase-secret-key")], exceptions: [] };
+    const path = "browser/chunk-THROWN.js";
+    let findings;
+    assert.doesNotThrow(() => { findings = scanArtifact(makeArtifact({ [path]: `/* synthetic */\r\nconst k="${triggerOf("supabase-secret-key")}";\r\n` }, { clean: false }), list); }, "scanArtifact no debe lanzar: el valor lanzado se convierte en scan-error");
+    const want = [...THROWN.map(([id]) => `${path}:0|scan-error|${scanErrorSample(id, "Error")}`), `${path}:2|supabase-secret-key`].sort();
+    assert.deepEqual(findings.map((f) => `${keyOf(f)}${f.rule === "scan-error" ? `|${f.sample}` : ""}`).sort(), want, `se esperaba un scan-error «(Error)» por regla y el hallazgo de la línea 2: ${JSON.stringify(findings)}`);
+    assert.ok(!JSON.stringify(findings).includes(SENTINEL), "sample no puede mostrar el valor lanzado");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Round 1 · S20/Q19: an error whose `name` cannot be read (a getter that throws, or a Proxy) must not escape the
+// per-rule catch nor the final net of main. Expected after the fix (design §8.4, DEC-0020): the type shown is «Error».
+// Written before the fix, black box; only added.
+// ---------------------------------------------------------------------------------------------
+// An Error whose own `name` getter throws a TypeError with the sentinel.
+function hostileNameError() {
+  const error = new RangeError(SENTINEL);
+  Object.defineProperty(error, "name", { configurable: true, get() { throw new TypeError(SENTINEL); } });
+  return error;
+}
+// The same error, as source text for a preload.
+const HOSTILE_ERROR_SOURCE = `(() => {
+  const error = new RangeError(${JSON.stringify(SENTINEL)});
+  Object.defineProperty(error, "name", { configurable: true, get() { throw new TypeError(${JSON.stringify(SENTINEL)}); } });
+  return error;
+})()`;
+// Like execPreload("always"), but every exec of PRELOAD_RULE throws the error with a hostile name.
+const hostileExecPreload = () => `
+import { readFileSync } from "node:fs";
+const list = JSON.parse(readFileSync(${JSON.stringify(LIST)}, "utf8"));
+const source = new RegExp(list.contents.find((r) => r.id === ${JSON.stringify(PRELOAD_RULE)}).pattern, "u").source;
+const exec = RegExp.prototype.exec;
+RegExp.prototype.exec = function (s) {
+  if (this.source === source) throw ${HOSTILE_ERROR_SOURCE};
+  return exec.call(this, s);
+};
+`;
+// Like builtinPreload, but the builtin throws the error with a hostile name.
+const hostileBuiltinPreload = (moduleName, fn, argIndex, target) => `
+import mod from ${JSON.stringify(moduleName)};
+import { syncBuiltinESMExports } from "node:module";
+const original = mod[${JSON.stringify(fn)}];
+mod[${JSON.stringify(fn)}] = function (...args) {
+  if (String(args[${argIndex}]).endsWith(${JSON.stringify(target)})) throw ${HOSTILE_ERROR_SOURCE};
+  return original.apply(this, args);
+};
+syncBuiltinESMExports();
+`;
+const TRACE_UNCAUGHT_RE = /--trace-uncaught/;
+
+describe("[EP00-TBR-019-CA3] round 1 · S20/Q19: an error whose name cannot be read still gives a scan-error «(Error)» and never escapes", () => {
+  test("[EP00-TBR-019-CA3] round 1 self-check: the hostile error really throws when its name is read", () => {
+    assert.throws(() => hostileNameError().name, TypeError, "el getter de name del error sintético debe lanzar");
+  });
+
+  test("[EP00-TBR-019-CA3] round 1 · in process: a rule that throws an error with a hostile name gives exactly one scan-error «(Error)» per file, scanArtifact does not throw, and every other finding stays", () => {
+    const scanArtifact = exported("scanArtifact");
+    const real = realList();
+    const byId = (id) => real.contents.find((r) => r.id === id);
+    const HOSTILE = [
+      ["synthetic-hostile-name-getter", () => hostileNameError()],
+      ["synthetic-hostile-name-getter-throws-text", () => {
+        const error = new Error(SENTINEL);
+        Object.defineProperty(error, "name", { get() { throw `${SENTINEL} text`; } });
+        return error;
+      }],
+      ["synthetic-hostile-proxy", () => new Proxy({}, { get() { throw new TypeError(SENTINEL); } })],
+    ];
+    const list = {
+      version: 1,
+      names: real.names.filter((r) => r.id === "vercel-config"),
+      contents: [byId("supabase-secret-key"), ...HOSTILE.map(([id, make]) => throwingRule(id, "regex", "pattern", make)), byId("postgres-url-with-password"), byId(PRELOAD_RULE)],
+      exceptions: [],
+    };
+    const files = {
+      "browser/a.js": `/* synthetic */\nconst k="${triggerOf("supabase-secret-key")}";\nconst v="${TRIGGER_BY_RULE[PRELOAD_RULE]()}";\n`,
+      "browser/b.js": `const u="${triggerOf("postgres-url-with-password")}";\n`,
+      "browser/vercel.json": "{}\n",
+    };
+    let findings;
+    assert.doesNotThrow(() => { findings = scanArtifact(makeArtifact(files, { clean: false }), list); }, "scanArtifact no debe lanzar aunque no se pueda leer el nombre del error: debe dar un scan-error «(Error)»");
+    const key = (f) => `${keyOf(f)}${f.rule === "scan-error" ? `|${f.sample}` : ""}`;
+    const want = [
+      "browser/a.js:2|supabase-secret-key",
+      `browser/a.js:3|${PRELOAD_RULE}`,
+      "browser/b.js:1|postgres-url-with-password",
+      "browser/vercel.json:0|vercel-config",
+      ...Object.keys(files).flatMap((path) => HOSTILE.map(([id]) => `${path}:0|scan-error|${scanErrorSample(id, "Error")}`)),
+    ].sort();
+    assert.deepEqual(findings.map(key).sort(), want, `se esperaba exactamente un scan-error «(Error)» por regla hostil y archivo, y el resto de hallazgos: ${JSON.stringify(findings)}`);
+    assert.ok(!JSON.stringify(findings).includes(SENTINEL), "sample no puede mostrar el mensaje del error ni lo que lanza el getter");
+  });
+
+  test("[EP00-TBR-019-CA3] round 1 · CLI: a rule whose error has a hostile name gives one scan-error «(Error)» line per file, the rest of the findings and the summary, with no trace, no sentinel and no --trace-uncaught", () => {
+    const dir = makeArtifact(ca3Files());
+    const paths = Object.keys({ ...CLEAN_FILES(), ...ca3Files() });
+    const r = runWithPreload(hostileExecPreload(), ["--dir", dir]);
+    assert.doesNotMatch(r.output, TRACE_UNCAUGHT_RE, `el error no puede quedar sin capturar (aviso --trace-uncaught de Node)\n${r.output.slice(0, 2_000)}`);
+    const lines = errorLines(r.stderr);
+    for (const path of paths) assert.equal(lines.filter((l) => l === scanErrorLine(path, PRELOAD_RULE, "Error")).length, 1, `${path}: se esperaba una línea «${scanErrorLine(path, PRELOAD_RULE, "Error")}»\nstderr: ${r.stderr.slice(0, 3_000)}`);
+    assertClosedAndSilent(r);
+    assert.ok(names(r.stderr, CA3_TARGET, "supabase-secret-key", 3), `falta el hallazgo de supabase-secret-key en ${CA3_TARGET}:3\nstderr: ${r.stderr.slice(0, 3_000)}`);
+    assert.ok(names(r.stderr, CA3_OTHER, "postgres-url-with-password", 1), `falta el hallazgo de postgres-url-with-password en ${CA3_OTHER}:1\nstderr: ${r.stderr.slice(0, 3_000)}`);
+    assert.ok(names(r.stderr, "browser/vercel.json", "vercel-config"), `falta el hallazgo de vercel-config\nstderr: ${r.stderr.slice(0, 3_000)}`);
+    assert.equal(Number(SUMMARY_RE.exec(r.stderr)?.[1]), paths.length + 3, `el resumen debe contar ${paths.length + 3} hallazgos\nstderr: ${r.stderr.slice(0, 3_000)}`);
+    assert.equal(lines.length, paths.length + 3, `se esperaban ${paths.length + 3} líneas ERROR\nstderr: ${r.stderr.slice(0, 3_000)}`);
+  });
+
+  test("[EP00-TBR-019-CA3] round 1 · final net: an error with a hostile name outside the protected steps exits 1 with «error inesperado al revisar … (Error)», no trace, no sentinel and no --trace-uncaught", () => {
+    const dir = makeArtifact({ "browser/chunk-NET.js": `const k="${triggerOf("supabase-secret-key")}";\n` });
+    const r = runWithPreload(hostileBuiltinPreload("node:path", "relative", 1, "chunk-NET.js"), ["--dir", dir]);
+    assert.doesNotMatch(r.output, TRACE_UNCAUGHT_RE, `el error no puede quedar sin capturar (aviso --trace-uncaught de Node)\n${r.output.slice(0, 2_000)}`);
+    const m = /^check-artifact: error inesperado al revisar (.+) \(Error\); la revisión falla y no se sube nada$/m.exec(r.output);
+    assert.ok(m, `se esperaba «check-artifact: error inesperado al revisar <dir> (Error); la revisión falla y no se sube nada»\n${r.output.slice(0, 3_000)}`);
+    assertClosedAndSilent(r);
+    assert.ok(m[1].endsWith(dir.split("/").pop()), `el mensaje debe nombrar la carpeta revisada: ${m[1]}`);
+    assert.doesNotMatch(r.output, /0 hallazgos/, `la red final nunca da un resultado limpio\n${r.output.slice(0, 2_000)}`);
+  });
+});
