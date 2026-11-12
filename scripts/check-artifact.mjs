@@ -160,9 +160,14 @@ function decodeRole(payload) {
 }
 
 // Error type shown to people: only a plain error name, never the message or the trace.
+// Never throws: reading `name` can throw on a hostile thrown value (getter or Proxy), and then the type is "Error".
 const errorType = (error) => {
-  const name = error?.name;
-  return typeof name === "string" && /^[A-Za-z]{1,40}$/.test(name) ? name : "Error";
+  try {
+    const name = error?.name;
+    return typeof name === "string" && /^[A-Za-z]{1,40}$/.test(name) ? name : "Error";
+  } catch {
+    return "Error";
+  }
 };
 
 // Content matches of one rule, yielded as they are found: { index, text } where text is the matched string (never

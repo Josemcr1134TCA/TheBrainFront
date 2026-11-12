@@ -2088,3 +2088,114 @@ describe("[EP00-TBR-019-CA1][EP00-TBR-019-CA3] T3 edge cases: CRLF, several scan
     assert.ok(!JSON.stringify(findings).includes(SENTINEL), "sample no puede mostrar el valor lanzado");
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// Round 1 · S20/Q19: an error whose `name` cannot be read (a getter that throws, or a Proxy) must not escape the
+// per-rule catch nor the final net of main. Expected after the fix (design §8.4, DEC-0020): the type shown is «Error».
+// Written before the fix, black box; only added.
+// ---------------------------------------------------------------------------------------------
+// An Error whose own `name` getter throws a TypeError with the sentinel.
+function hostileNameError() {
+  const error = new RangeError(SENTINEL);
+  Object.defineProperty(error, "name", { configurable: true, get() { throw new TypeError(SENTINEL); } });
+  return error;
+}
+// The same error, as source text for a preload.
+const HOSTILE_ERROR_SOURCE = `(() => {
+  const error = new RangeError(${JSON.stringify(SENTINEL)});
+  Object.defineProperty(error, "name", { configurable: true, get() { throw new TypeError(${JSON.stringify(SENTINEL)}); } });
+  return error;
+})()`;
+// Like execPreload("always"), but every exec of PRELOAD_RULE throws the error with a hostile name.
+const hostileExecPreload = () => `
+import { readFileSync } from "node:fs";
+const list = JSON.parse(readFileSync(${JSON.stringify(LIST)}, "utf8"));
+const source = new RegExp(list.contents.find((r) => r.id === ${JSON.stringify(PRELOAD_RULE)}).pattern, "u").source;
+const exec = RegExp.prototype.exec;
+RegExp.prototype.exec = function (s) {
+  if (this.source === source) throw ${HOSTILE_ERROR_SOURCE};
+  return exec.call(this, s);
+};
+`;
+// Like builtinPreload, but the builtin throws the error with a hostile name.
+const hostileBuiltinPreload = (moduleName, fn, argIndex, target) => `
+import mod from ${JSON.stringify(moduleName)};
+import { syncBuiltinESMExports } from "node:module";
+const original = mod[${JSON.stringify(fn)}];
+mod[${JSON.stringify(fn)}] = function (...args) {
+  if (String(args[${argIndex}]).endsWith(${JSON.stringify(target)})) throw ${HOSTILE_ERROR_SOURCE};
+  return original.apply(this, args);
+};
+syncBuiltinESMExports();
+`;
+const TRACE_UNCAUGHT_RE = /--trace-uncaught/;
+
+describe("[EP00-TBR-019-CA3] round 1 · S20/Q19: an error whose name cannot be read still gives a scan-error «(Error)» and never escapes", () => {
+  test("[EP00-TBR-019-CA3] round 1 self-check: the hostile error really throws when its name is read", () => {
+    assert.throws(() => hostileNameError().name, TypeError, "el getter de name del error sintético debe lanzar");
+  });
+
+  test("[EP00-TBR-019-CA3] round 1 · in process: a rule that throws an error with a hostile name gives exactly one scan-error «(Error)» per file, scanArtifact does not throw, and every other finding stays", () => {
+    const scanArtifact = exported("scanArtifact");
+    const real = realList();
+    const byId = (id) => real.contents.find((r) => r.id === id);
+    const HOSTILE = [
+      ["synthetic-hostile-name-getter", () => hostileNameError()],
+      ["synthetic-hostile-name-getter-throws-text", () => {
+        const error = new Error(SENTINEL);
+        Object.defineProperty(error, "name", { get() { throw `${SENTINEL} text`; } });
+        return error;
+      }],
+      ["synthetic-hostile-proxy", () => new Proxy({}, { get() { throw new TypeError(SENTINEL); } })],
+    ];
+    const list = {
+      version: 1,
+      names: real.names.filter((r) => r.id === "vercel-config"),
+      contents: [byId("supabase-secret-key"), ...HOSTILE.map(([id, make]) => throwingRule(id, "regex", "pattern", make)), byId("postgres-url-with-password"), byId(PRELOAD_RULE)],
+      exceptions: [],
+    };
+    const files = {
+      "browser/a.js": `/* synthetic */\nconst k="${triggerOf("supabase-secret-key")}";\nconst v="${TRIGGER_BY_RULE[PRELOAD_RULE]()}";\n`,
+      "browser/b.js": `const u="${triggerOf("postgres-url-with-password")}";\n`,
+      "browser/vercel.json": "{}\n",
+    };
+    let findings;
+    assert.doesNotThrow(() => { findings = scanArtifact(makeArtifact(files, { clean: false }), list); }, "scanArtifact no debe lanzar aunque no se pueda leer el nombre del error: debe dar un scan-error «(Error)»");
+    const key = (f) => `${keyOf(f)}${f.rule === "scan-error" ? `|${f.sample}` : ""}`;
+    const want = [
+      "browser/a.js:2|supabase-secret-key",
+      `browser/a.js:3|${PRELOAD_RULE}`,
+      "browser/b.js:1|postgres-url-with-password",
+      "browser/vercel.json:0|vercel-config",
+      ...Object.keys(files).flatMap((path) => HOSTILE.map(([id]) => `${path}:0|scan-error|${scanErrorSample(id, "Error")}`)),
+    ].sort();
+    assert.deepEqual(findings.map(key).sort(), want, `se esperaba exactamente un scan-error «(Error)» por regla hostil y archivo, y el resto de hallazgos: ${JSON.stringify(findings)}`);
+    assert.ok(!JSON.stringify(findings).includes(SENTINEL), "sample no puede mostrar el mensaje del error ni lo que lanza el getter");
+  });
+
+  test("[EP00-TBR-019-CA3] round 1 · CLI: a rule whose error has a hostile name gives one scan-error «(Error)» line per file, the rest of the findings and the summary, with no trace, no sentinel and no --trace-uncaught", () => {
+    const dir = makeArtifact(ca3Files());
+    const paths = Object.keys({ ...CLEAN_FILES(), ...ca3Files() });
+    const r = runWithPreload(hostileExecPreload(), ["--dir", dir]);
+    assert.doesNotMatch(r.output, TRACE_UNCAUGHT_RE, `el error no puede quedar sin capturar (aviso --trace-uncaught de Node)\n${r.output.slice(0, 2_000)}`);
+    const lines = errorLines(r.stderr);
+    for (const path of paths) assert.equal(lines.filter((l) => l === scanErrorLine(path, PRELOAD_RULE, "Error")).length, 1, `${path}: se esperaba una línea «${scanErrorLine(path, PRELOAD_RULE, "Error")}»\nstderr: ${r.stderr.slice(0, 3_000)}`);
+    assertClosedAndSilent(r);
+    assert.ok(names(r.stderr, CA3_TARGET, "supabase-secret-key", 3), `falta el hallazgo de supabase-secret-key en ${CA3_TARGET}:3\nstderr: ${r.stderr.slice(0, 3_000)}`);
+    assert.ok(names(r.stderr, CA3_OTHER, "postgres-url-with-password", 1), `falta el hallazgo de postgres-url-with-password en ${CA3_OTHER}:1\nstderr: ${r.stderr.slice(0, 3_000)}`);
+    assert.ok(names(r.stderr, "browser/vercel.json", "vercel-config"), `falta el hallazgo de vercel-config\nstderr: ${r.stderr.slice(0, 3_000)}`);
+    assert.equal(Number(SUMMARY_RE.exec(r.stderr)?.[1]), paths.length + 3, `el resumen debe contar ${paths.length + 3} hallazgos\nstderr: ${r.stderr.slice(0, 3_000)}`);
+    assert.equal(lines.length, paths.length + 3, `se esperaban ${paths.length + 3} líneas ERROR\nstderr: ${r.stderr.slice(0, 3_000)}`);
+  });
+
+  test("[EP00-TBR-019-CA3] round 1 · final net: an error with a hostile name outside the protected steps exits 1 with «error inesperado al revisar … (Error)», no trace, no sentinel and no --trace-uncaught", () => {
+    const dir = makeArtifact({ "browser/chunk-NET.js": `const k="${triggerOf("supabase-secret-key")}";\n` });
+    const r = runWithPreload(hostileBuiltinPreload("node:path", "relative", 1, "chunk-NET.js"), ["--dir", dir]);
+    assert.doesNotMatch(r.output, TRACE_UNCAUGHT_RE, `el error no puede quedar sin capturar (aviso --trace-uncaught de Node)\n${r.output.slice(0, 2_000)}`);
+    const m = /^check-artifact: error inesperado al revisar (.+) \(Error\); la revisión falla y no se sube nada$/m.exec(r.output);
+    assert.ok(m, `se esperaba «check-artifact: error inesperado al revisar <dir> (Error); la revisión falla y no se sube nada»\n${r.output.slice(0, 3_000)}`);
+    assertClosedAndSilent(r);
+    assert.ok(m[1].endsWith(dir.split("/").pop()), `el mensaje debe nombrar la carpeta revisada: ${m[1]}`);
+    assert.doesNotMatch(r.output, /0 hallazgos/, `la red final nunca da un resultado limpio\n${r.output.slice(0, 2_000)}`);
+  });
+});
