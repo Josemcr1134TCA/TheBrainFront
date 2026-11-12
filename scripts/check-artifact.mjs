@@ -4,7 +4,7 @@
 // Fails closed: a missing artifact, a bad list, symlinks and unreadable files all fail the review.
 // Findings never carry a secret in full: only the rule id, the path, the line and at most 6 characters plus «…».
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -16,6 +16,30 @@ const SAMPLE_LENGTH = 6;
 // JWT search in linear time: split every run of token characters at the dots instead of backtracking a regex.
 const TOKEN_RUN_RE = /[\w.-]+/g;
 const PURE_WILDCARD_RE = /^\*+(?:\/\*+)*$/;
+// Ids of the script's own findings (DEC-0019 §5, DEC-0025 §2). A list rule may not use them (EP00-TBR-020).
+const FINDING_ID = Object.freeze({
+  unreadable: "unreadable",
+  symlink: "symlink",
+  unsupportedType: "unsupported-type",
+  scanError: "scan-error",
+});
+const RESERVED_FINDING_IDS = new Set(Object.values(FINDING_ID));
+
+// Rule ids are compared ignoring case and leading or trailing whitespace (EP00-TBR-020, P1).
+// Returns null for a non-string, so it never throws and never matches anything.
+const normalizeRuleId = (id) => (typeof id === "string" ? id.trim().toLowerCase() : null);
+
+// Errors whose message was written by this script and is safe to print as is (no code, no engine detail, no path outside the front).
+class PatternListError extends Error {
+  name = "PatternListError";
+}
+
+// Path of the list as shown to people: relative to the front, or only the file name when it lies outside of it.
+function shownListPath(path) {
+  const rel = relative(root, resolve(path)).split("\\").join("/");
+  if (rel && rel !== ".." && !rel.startsWith("../") && !isAbsolute(rel)) return rel;
+  return basename(path);
+}
 
 const USAGE = "Uso: node scripts/check-artifact.mjs [--dir <ruta>]";
 
@@ -65,12 +89,12 @@ export function loadPatternList(path) {
   try {
     text = readFileSync(path, "utf8");
   } catch (error) {
-    throw new Error(`No se pudo leer la lista de patrones prohibidos en ${path}: ${error.code ?? error.message}`);
+    throw new PatternListError(`No se pudo leer la lista de patrones prohibidos en ${shownListPath(path)}`);
   }
   try {
     return JSON.parse(text);
-  } catch (error) {
-    throw new Error(`La lista de patrones prohibidos no es un JSON válido (${path}): ${error.message}`);
+  } catch {
+    throw new PatternListError(`La lista de patrones prohibidos no es un JSON válido (${shownListPath(path)})`);
   }
 }
 
@@ -84,7 +108,7 @@ export function validatePatternList(list) {
   if (!contents.length) errors.push("«contents» no puede faltar ni estar vacío");
   if (list.exceptions !== undefined && !Array.isArray(list.exceptions)) errors.push("«exceptions» debe ser un arreglo");
 
-  const seen = new Set();
+  const seen = new Map(); // normalized id -> id as written in its first appearance
   const contentIds = new Set();
   const common = (rule, group, index) => {
     const label = `${group}[${index}]${rule && typeof rule.id === "string" ? ` (${rule.id})` : ""}`;
@@ -93,8 +117,16 @@ export function validatePatternList(list) {
       return null;
     }
     if (typeof rule.id !== "string" || !rule.id.trim()) errors.push(`${label}: falta el id`);
-    else if (seen.has(rule.id)) errors.push(`${label}: id repetido «${rule.id}»`);
-    else seen.add(rule.id);
+    else if (RESERVED_FINDING_IDS.has(normalizeRuleId(rule.id))) {
+      errors.push(`${label}: el id «${rule.id}» está reservado para un hallazgo propio del script («${normalizeRuleId(rule.id)}»); use otro id`);
+    } else if (seen.has(normalizeRuleId(rule.id))) {
+      const first = seen.get(normalizeRuleId(rule.id));
+      errors.push(
+        first === rule.id
+          ? `${label}: id repetido «${rule.id}»`
+          : `${label}: id repetido «${rule.id}» (coincide con «${first}» sin contar mayúsculas ni espacios al inicio o al final)`,
+      );
+    } else seen.set(normalizeRuleId(rule.id), rule.id);
     if (typeof rule.reason !== "string" || !rule.reason.trim()) errors.push(`${label}: falta el motivo (reason)`);
     return label;
   };
@@ -109,7 +141,7 @@ export function validatePatternList(list) {
   contents.forEach((rule, index) => {
     const label = common(rule, "contents", index);
     if (!label) return;
-    if (typeof rule.id === "string") contentIds.add(rule.id);
+    if (typeof rule.id === "string" && rule.id.trim() && !RESERVED_FINDING_IDS.has(normalizeRuleId(rule.id))) contentIds.add(normalizeRuleId(rule.id));
     if (!CONTENT_KINDS.has(rule.kind)) {
       errors.push(`${label}: kind desconocido «${rule.kind}» (use regex o jwt-role)`);
     } else if (rule.kind === "regex") {
@@ -132,7 +164,8 @@ export function validatePatternList(list) {
       errors.push(`${label}: la excepción debe ser un objeto`);
       return;
     }
-    if (!contentIds.has(exception.rule)) errors.push(`${label}: la regla «${exception.rule}» no es una regla de contenido existente`);
+    if (RESERVED_FINDING_IDS.has(normalizeRuleId(exception.rule))) errors.push(`${label}: la regla «${exception.rule}» es un id propio del script («${normalizeRuleId(exception.rule)}»); las excepciones solo eximen reglas de contenido de la lista`);
+    else if (!contentIds.has(normalizeRuleId(exception.rule))) errors.push(`${label}: la regla «${exception.rule}» no es una regla de contenido existente`);
     if (typeof exception.path !== "string" || !exception.path.trim()) errors.push(`${label}: falta la ruta (path)`);
     else if (exception.path !== exception.path.trim()) errors.push(`${label}: la ruta «${exception.path}» no puede llevar espacios al inicio ni al final`);
     else if (exception.path.startsWith("/") || exception.path.startsWith("./")) errors.push(`${label}: la ruta «${exception.path}» debe ser relativa al artefacto, sin «/» ni «./» al inicio`);
@@ -208,14 +241,16 @@ function scanDetailed(dir, list) {
   const findings = [];
   let files = 0;
   const nameRules = list.names.map((rule) => ({ rule, re: globToRegExp(rule.name, true) }));
-  const exceptions = (list.exceptions ?? []).map((e) => ({ rule: e.rule, re: globToRegExp(e.path) }));
+  const exceptions = (list.exceptions ?? [])
+    .map((e) => ({ key: normalizeRuleId(e.rule), re: globToRegExp(e.path) }))
+    .filter((e) => e.key !== null);
 
   const walk = (current) => {
     let entries;
     try {
       entries = readdirSync(current, { withFileTypes: true });
     } catch {
-      findings.push({ rule: "unreadable", path: relative(dir, current) || ".", line: 0, sample: "no se pudo leer la carpeta" });
+      findings.push({ rule: FINDING_ID.unreadable, path: relative(dir, current) || ".", line: 0, sample: "no se pudo leer la carpeta" });
       return;
     }
     for (const entry of entries.sort((a, b) => (a.name < b.name ? -1 : 1))) {
@@ -225,11 +260,11 @@ function scanDetailed(dir, list) {
       try {
         isLink = entry.isSymbolicLink() || lstatSync(abs).isSymbolicLink();
       } catch {
-        findings.push({ rule: "unreadable", path, line: 0, sample: "no se pudo leer la entrada" });
+        findings.push({ rule: FINDING_ID.unreadable, path, line: 0, sample: "no se pudo leer la entrada" });
         continue;
       }
       if (isLink) {
-        findings.push({ rule: "symlink", path, line: 0, sample: "enlace simbólico; no se sigue" });
+        findings.push({ rule: FINDING_ID.symlink, path, line: 0, sample: "enlace simbólico; no se sigue" });
         continue;
       }
       const isDir = entry.isDirectory();
@@ -243,7 +278,7 @@ function scanDetailed(dir, list) {
         continue;
       }
       if (!entry.isFile()) {
-        findings.push({ rule: "unsupported-type", path, line: 0, sample: "tipo de archivo no admitido (FIFO, socket o dispositivo); no se lee" });
+        findings.push({ rule: FINDING_ID.unsupportedType, path, line: 0, sample: "tipo de archivo no admitido (FIFO, socket o dispositivo); no se lee" });
         continue;
       }
       files++;
@@ -251,7 +286,7 @@ function scanDetailed(dir, list) {
       try {
         text = readFileSync(abs).toString("latin1");
       } catch {
-        findings.push({ rule: "unreadable", path, line: 0, sample: "no se pudo leer el archivo" });
+        findings.push({ rule: FINDING_ID.unreadable, path, line: 0, sample: "no se pudo leer el archivo" });
         continue;
       }
       // Line numbers: positions of "\n" computed once per file, then a binary search per match.
@@ -271,7 +306,7 @@ function scanDetailed(dir, list) {
         return lo + 1;
       };
       for (const rule of list.contents) {
-        if (exceptions.some((e) => e.rule === rule.id && e.re.test(path))) continue;
+        if (exceptions.some((e) => e.key === normalizeRuleId(rule.id) && e.re.test(path))) continue;
         const reported = new Set();
         try {
           for (const match of contentMatches(rule, text)) {
@@ -282,7 +317,7 @@ function scanDetailed(dir, list) {
           }
         } catch (error) {
           // Fail closed: matches found before the error are kept; the other rules and files still run.
-          findings.push({ rule: "scan-error", path, line: 0, sample: `no se pudo revisar con la regla «${rule.id}» (${errorType(error)}); el archivo no pasa la revisión` });
+          findings.push({ rule: FINDING_ID.scanError, path, line: 0, sample: `no se pudo revisar con la regla «${rule.id}» (${errorType(error)}); el archivo no pasa la revisión` });
         }
       }
     }
@@ -324,9 +359,13 @@ function main(argv) {
   try {
     list = loadPatternList(LIST_PATH);
     const errors = validatePatternList(list);
-    if (errors.length) throw new Error(`La lista de patrones prohibidos no es válida:\n${errors.map((e) => `  - ${e}`).join("\n")}`);
+    if (errors.length) throw new PatternListError(`La lista de patrones prohibidos no es válida:\n${errors.map((e) => `  - ${e}`).join("\n")}`);
   } catch (error) {
-    console.error(error.message);
+    console.error(
+      error instanceof PatternListError
+        ? error.message
+        : `No se pudo cargar la lista de patrones prohibidos (${shownListPath(LIST_PATH)}): error inesperado (${errorType(error)}); la revisión falla y no se revisa nada`,
+    );
     process.exitCode = 1;
     return;
   }
