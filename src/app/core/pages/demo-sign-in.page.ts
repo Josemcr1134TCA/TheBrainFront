@@ -38,12 +38,15 @@ export class DemoSignInPage {
   protected readonly profiles = signal<readonly Profile[] | null>(null);
   /** Profile being confirmed (PA-4): its row says «Entrando…» or «Cambiando…» and every row is disabled. */
   protected readonly pendingId = signal<string | null>(null);
-  protected readonly failed = signal(false);
+  /** Where the error comes from: loading the list (CA6 text) or trying to sign in or switch (D3 text). */
+  protected readonly failed = signal<'load' | 'attempt' | null>(null);
 
   protected readonly activeId = computed(() => this.store.session()?.profile.id ?? null);
   protected readonly busyText = computed(() => (this.store.session() ? 'Cambiando…' : 'Entrando…'));
   protected readonly errorText = computed(() => {
-    if (!this.failed()) return null;
+    const failure = this.failed();
+    if (failure === null) return null;
+    if (failure === 'load') return IDENTITY_ERROR;
     const active = this.store.session()?.profile.name;
     return active ? `No pudimos cambiar de perfil. Sigues con ${active}.` : IDENTITY_ERROR;
   });
@@ -53,7 +56,7 @@ export class DemoSignInPage {
       .list()
       .pipe(
         catchError(() => {
-          this.failed.set(true);
+          this.failed.set('load');
           return of<readonly Profile[]>([]);
         }),
         takeUntilDestroyed(this.destroyRef),
@@ -67,7 +70,7 @@ export class DemoSignInPage {
 
   protected choose(profile: Profile): void {
     if (this.pendingId() !== null) return;
-    this.failed.set(false);
+    this.failed.set(null);
     this.pendingId.set(profile.id);
     const request = this.store.session()
       ? this.store.switchProfile(profile.id)
@@ -79,7 +82,7 @@ export class DemoSignInPage {
       },
       error: () => {
         this.pendingId.set(null);
-        this.failed.set(true);
+        this.failed.set('attempt');
       },
       complete: () => this.pendingId.set(null),
     });
