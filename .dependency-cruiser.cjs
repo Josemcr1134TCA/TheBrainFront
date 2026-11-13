@@ -64,7 +64,7 @@ module.exports = {
     },
     {
       name: "views-no-adapter",
-      comment: "pages/ and components/ only know the port: they do not import concrete adapters (*.adapter.ts), fixtures (*.fixture.ts), data providers (*.providers.ts) or the data-mode switch; these live directly in data/ (EP00-TBR-003).",
+      comment: "pages/ and components/ only know the port: they do not import concrete adapters (*.adapter.ts), fixtures (*.fixture.ts), data providers (*.providers.ts) or the data-mode switch; these live directly in data/ (EP00-TBR-003). This includes the identity adapter, fixtures and providers in core/data/ (EP00-TBR-005).",
       severity: "error",
       from: { path: "^src/app/[^/]+/(pages|components)/" },
       to: { path: "^src/app/([^/]+/data/[^/]+\\.(adapter|fixture|providers)|core/data/(data-mode|in-memory-failure))\\.ts$" },

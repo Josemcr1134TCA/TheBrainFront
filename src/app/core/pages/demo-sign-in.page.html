@@ -1,0 +1,39 @@
+<div class="tb-auth">
+  <div class="tb-authw">
+    <tb-banner level="info">Estás en modo demostración: los perfiles son de muestra.</tb-banner>
+    <div class="tb-authcard">
+      <div class="edge"></div>
+      <div class="in">
+        <h1>Elige un perfil</h1>
+        @if (errorText(); as text) {
+          <tb-banner level="bad">{{ text }}</tb-banner>
+        }
+        @if (profiles(); as list) {
+          <div class="profiles" role="group" aria-label="Perfiles de demostración">
+            @for (profile of list; track profile.id) {
+              <button
+                type="button"
+                class="tb-mi"
+                [class.on]="profile.id === activeId()"
+                [attr.aria-current]="profile.id === activeId() ? 'true' : null"
+                [attr.aria-disabled]="pendingId() !== null ? 'true' : null"
+                (click)="choose(profile)"
+              >
+                <span class="tb-av">{{ initial(profile) }}</span>
+                <span class="grow">{{ profile.id === pendingId() ? busyText() : profile.name }}</span>
+                @if (profile.id === activeId()) {
+                  <span class="tb-sr">Perfil activo</span>
+                  <svg class="chk" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg>
+                }
+              </button>
+            }
+          </div>
+        } @else {
+          <div role="status" aria-busy="true" aria-label="Cargando perfiles">
+            <tb-skeleton shape="rows" [rows]="6" />
+          </div>
+        }
+      </div>
+    </div>
+  </div>
+</div>
