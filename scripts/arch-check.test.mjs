@@ -7,6 +7,10 @@
 // [EP00-TBR-003-CA4] Adds views-no-adapter: pages/ and components/ of any module only know the port; they do not import
 // a concrete adapter (data/*.adapter.ts), a fixture (data/*.fixture.ts), a data providers file (data/*.providers.ts)
 // or the data switches (core/data/data-mode.ts, core/data/in-memory-failure.ts). 16 forbidden rules in total (AJ-1).
+// [EP00-TBR-005-CA7] No view (pages/ or components/ of a module or of core/) imports the concrete identity adapter, its
+// fixtures or its wiring (core/data/*.adapter.ts, *.fixture.ts, *.providers.ts); views import the ports, AccessStore and
+// core/model/* only. Covered by views-no-adapter, unchanged (design EP00-TBR-005 §9). DA-1 (approved by Elkin): demo
+// fixtures may also live exactly in src/app/core/data/*.fixture.ts (nowhere else under core/).
 // [EP00-TBR-014-CA6] The module list of .dependency-cruiser.cjs must match the table fixed in this file (MODULES).
 // If it does not, this file fails, so `arch:check` fails in its test step and says which name is extra and which is missing.
 // Fixtures are written at runtime under tmp/ (ignored by git) and removed afterwards.
@@ -278,6 +282,95 @@ const CASES = [
     from: "src/app/catalog/components/row/row.ts",
     to: "src/app/catalog/data/in-memory-product.adapter.ts",
   },
+  // [EP00-TBR-005-CA7] views-no-adapter with the identity files of core/data/ (design EP00-TBR-005 §9).
+  {
+    tag: "[EP00-TBR-005-CA7]",
+    title: "fails on views-no-adapter when core/pages/ imports the in-memory identity adapter",
+    rule: "views-no-adapter",
+    files: {
+      "src/app/core/data/in-memory-identity.adapter.ts": "export class InMemoryIdentityAdapter {}\n",
+      "src/app/core/pages/x.page.ts": "import { InMemoryIdentityAdapter } from '../data/in-memory-identity.adapter';\nexport const p = InMemoryIdentityAdapter;\n",
+    },
+    from: "src/app/core/pages/x.page.ts",
+    to: "src/app/core/data/in-memory-identity.adapter.ts",
+  },
+  {
+    tag: "[EP00-TBR-005-CA7]",
+    title: "fails on views-no-adapter when core/pages/ imports the demo profiles fixture",
+    rule: "views-no-adapter",
+    files: {
+      "src/app/core/data/demo-profiles.fixture.ts": "export const DEMO_PROFILES = [] as const;\n",
+      "src/app/core/pages/x.page.ts": "import { DEMO_PROFILES } from '../data/demo-profiles.fixture';\nexport const p = DEMO_PROFILES;\n",
+    },
+    from: "src/app/core/pages/x.page.ts",
+    to: "src/app/core/data/demo-profiles.fixture.ts",
+  },
+  {
+    tag: "[EP00-TBR-005-CA7]",
+    title: "fails on views-no-adapter when core/pages/ imports identity-data.providers.ts",
+    rule: "views-no-adapter",
+    files: {
+      "src/app/core/data/identity-data.providers.ts": "export const provideIdentityData = () => [];\n",
+      "src/app/core/pages/x.page.ts": "import { provideIdentityData } from '../data/identity-data.providers';\nexport const p = provideIdentityData;\n",
+    },
+    from: "src/app/core/pages/x.page.ts",
+    to: "src/app/core/data/identity-data.providers.ts",
+  },
+  {
+    tag: "[EP00-TBR-005-CA7]",
+    title: "fails on views-no-adapter when core/pages/ imports the screen catalog fixture",
+    rule: "views-no-adapter",
+    files: {
+      "src/app/core/data/screen-catalog.fixture.ts": "export const SCREENS = [] as const;\n",
+      "src/app/core/pages/x.page.ts": "import { SCREENS } from '../data/screen-catalog.fixture';\nexport const p = SCREENS;\n",
+    },
+    from: "src/app/core/pages/x.page.ts",
+    to: "src/app/core/data/screen-catalog.fixture.ts",
+  },
+  {
+    tag: "[EP00-TBR-005-CA7]",
+    title: "fails on views-no-adapter when core/components/ imports the in-memory demo profiles adapter",
+    rule: "views-no-adapter",
+    files: {
+      "src/app/core/data/in-memory-demo-profiles.adapter.ts": "export class InMemoryDemoProfilesAdapter {}\n",
+      "src/app/core/components/c.ts": "import { InMemoryDemoProfilesAdapter } from '../data/in-memory-demo-profiles.adapter';\nexport const c = InMemoryDemoProfilesAdapter;\n",
+    },
+    from: "src/app/core/components/c.ts",
+    to: "src/app/core/data/in-memory-demo-profiles.adapter.ts",
+  },
+  {
+    tag: "[EP00-TBR-005-CA7]",
+    title: "fails on views-no-adapter when a module page imports the in-memory identity adapter of core",
+    rule: "views-no-adapter",
+    files: {
+      "src/app/core/data/in-memory-identity.adapter.ts": "export class InMemoryIdentityAdapter {}\n",
+      "src/app/catalog/pages/p.ts": "import { InMemoryIdentityAdapter } from '../../core/data/in-memory-identity.adapter';\nexport const p = InMemoryIdentityAdapter;\n",
+    },
+    from: "src/app/catalog/pages/p.ts",
+    to: "src/app/core/data/in-memory-identity.adapter.ts",
+  },
+  {
+    tag: "[EP00-TBR-005-CA7]",
+    title: "fails on views-no-adapter when a module component imports the demo profiles fixture of core",
+    rule: "views-no-adapter",
+    files: {
+      "src/app/core/data/demo-profiles.fixture.ts": "export const DEMO_PROFILES = [] as const;\n",
+      "src/app/purchasing/components/c.ts": "import { DEMO_PROFILES } from '../../core/data/demo-profiles.fixture';\nexport const c = DEMO_PROFILES;\n",
+    },
+    from: "src/app/purchasing/components/c.ts",
+    to: "src/app/core/data/demo-profiles.fixture.ts",
+  },
+  {
+    tag: "[EP00-TBR-005-CA7]",
+    title: "fails on views-no-adapter when a module page imports identity-data.providers.ts of core",
+    rule: "views-no-adapter",
+    files: {
+      "src/app/core/data/identity-data.providers.ts": "export const provideIdentityData = () => [];\n",
+      "src/app/administration/pages/p.ts": "import { provideIdentityData } from '../../core/data/identity-data.providers';\nexport const p = provideIdentityData;\n",
+    },
+    from: "src/app/administration/pages/p.ts",
+    to: "src/app/core/data/identity-data.providers.ts",
+  },
   {
     title: "fails on no-cycles when two files import each other",
     rule: "no-cycles",
@@ -422,6 +515,12 @@ test("[EP00-TBR-001-CA2][EP00-TBR-014-CA3][EP00-TBR-003-CA4] every forbidden rul
   assert.equal(CASES.filter((c) => c.rule === "module-layers").length, 2);
   // [EP00-TBR-003-CA4] views-no-adapter: adapter, fixture, providers and both core/data switches (design EP00-TBR-003 §8.5).
   assert.ok(CASES.filter((c) => c.rule === "views-no-adapter").length >= 5, "faltan variantes de views-no-adapter");
+  // [EP00-TBR-005-CA7] Identity side of core/data/: adapter, fixture and wiring, from core/pages/ and from a module view.
+  const identity = CASES.filter((c) => c.rule === "views-no-adapter" && c.tag === "[EP00-TBR-005-CA7]");
+  for (const to of ["src/app/core/data/in-memory-identity.adapter.ts", "src/app/core/data/demo-profiles.fixture.ts", "src/app/core/data/identity-data.providers.ts"]) {
+    assert.ok(identity.some((c) => c.to === to && c.from.startsWith("src/app/core/pages/")), `falta el caso de core/pages/ hacia ${to}`);
+    assert.ok(identity.some((c) => c.to === to && !c.from.startsWith("src/app/core/")), `falta el caso de un módulo hacia ${to}`);
+  }
 });
 
 test("[EP00-TBR-014-CA3][EP00-TBR-004-CA1][EP00-TBR-003-CA4] the config has exactly the 16 forbidden rules, all with their English names", () => {
@@ -504,9 +603,87 @@ describe("[EP00-TBR-003-CA4] views-no-adapter: allowed imports (negative control
   }
 });
 
+// [EP00-TBR-005-CA7] What views still may import for identity: the ports, AccessStore and core/model/*; the wiring
+// (app.config.ts, app.routes.ts, core/routing/ and core/data/ itself) may import the adapter side.
+describe("[EP00-TBR-005-CA7] views-no-adapter: allowed identity imports (negative controls)", { concurrency: CONCURRENCY }, () => {
+  const MODEL = {
+    "src/app/core/model/screen.ts": "export type ScreenCode = string & { readonly __brand: 'ScreenCode' };\n",
+    "src/app/core/model/action.ts": "export const Actions = { VIEW: 'view', CAPTURE: 'capture', APPROVE: 'approve' } as const;\n",
+    "src/app/core/model/profile.ts": "export interface Profile { readonly id: string; readonly name: string; readonly synthetic: boolean; }\n",
+    "src/app/core/model/session.ts": "import { Profile } from './profile';\nexport interface Session { readonly profile: Profile; }\n",
+  };
+  const PORTS = {
+    "src/app/core/data/api-error.ts": "export class ApiError extends Error {}\n",
+    "src/app/core/data/identity.port.ts": "export abstract class IdentityPort {}\n",
+    "src/app/core/data/demo-profiles.port.ts": "import { Profile } from '../model/profile';\nexport abstract class DemoProfilesPort { abstract list(): Profile[]; }\n",
+    "src/app/core/data/screen-catalog.port.ts": "export abstract class ScreenCatalogPort {}\n",
+    "src/app/core/data/normalize-permissions.ts": "export const normalizePermissions = () => new Map();\n",
+    "src/app/core/data/access.store.ts":
+      "import { IdentityPort } from './identity.port';\nimport { ScreenCatalogPort } from './screen-catalog.port';\nimport { normalizePermissions } from './normalize-permissions';\nimport { Session } from '../model/session';\nexport class AccessStore { deps = [IdentityPort, ScreenCatalogPort, normalizePermissions]; session: Session | null = null; }\n",
+  };
+  const ADAPTER_SIDE = {
+    "src/app/core/data/data-mode.ts": "export const DATA_MODE = 'DATA_MODE';\nexport const providePort = (port: unknown, adapters: unknown) => [port, adapters];\n",
+    "src/app/core/data/in-memory-failure.ts": "export const IN_MEMORY_FAILURE = 'failure';\n",
+    "src/app/core/data/demo-profiles.fixture.ts": "export const DEMO_PROFILES = [] as const;\n",
+    "src/app/core/data/screen-catalog.fixture.ts": "export const SCREENS = [] as const;\n",
+    "src/app/core/data/in-memory-identity.adapter.ts":
+      "import { IdentityPort } from './identity.port';\nimport { DEMO_PROFILES } from './demo-profiles.fixture';\nimport { IN_MEMORY_FAILURE } from './in-memory-failure';\nexport class InMemoryIdentityAdapter extends IdentityPort { seed = [DEMO_PROFILES, IN_MEMORY_FAILURE]; }\n",
+    "src/app/core/data/in-memory-screen-catalog.adapter.ts":
+      "import { ScreenCatalogPort } from './screen-catalog.port';\nimport { SCREENS } from './screen-catalog.fixture';\nexport class InMemoryScreenCatalogAdapter extends ScreenCatalogPort { seed = SCREENS; }\n",
+    "src/app/core/data/identity-data.providers.ts":
+      "import { providePort } from './data-mode';\nimport { IdentityPort } from './identity.port';\nimport { InMemoryIdentityAdapter } from './in-memory-identity.adapter';\nimport { ScreenCatalogPort } from './screen-catalog.port';\nimport { InMemoryScreenCatalogAdapter } from './in-memory-screen-catalog.adapter';\nexport const provideIdentityData = () => [providePort(IdentityPort, { memory: InMemoryIdentityAdapter }), providePort(ScreenCatalogPort, { memory: InMemoryScreenCatalogAdapter })];\n",
+  };
+  const CONTROLS = [
+    {
+      title: "core/pages/ imports AccessStore, the identity ports, core/model/* and api-error",
+      files: {
+        ...MODEL,
+        ...PORTS,
+        "src/app/core/pages/demo-sign-in.page.ts":
+          "import { AccessStore } from '../data/access.store';\nimport { DemoProfilesPort } from '../data/demo-profiles.port';\nimport { IdentityPort } from '../data/identity.port';\nimport { ApiError } from '../data/api-error';\nimport { Session } from '../model/session';\nimport { Actions } from '../model/action';\nexport const page = [AccessStore, DemoProfilesPort, IdentityPort, ApiError, Actions] as unknown as Session[];\n",
+        "src/app/core/pages/access-denied.page.ts": "import { AccessStore } from '../data/access.store';\nexport const denied = AccessStore;\n",
+      },
+    },
+    {
+      title: "module pages/ and components/ import AccessStore, the identity port and core/model/*",
+      files: {
+        ...MODEL,
+        ...PORTS,
+        "src/app/catalog/pages/list.ts":
+          "import { AccessStore } from '../../core/data/access.store';\nimport { Actions } from '../../core/model/action';\nimport { ScreenCode } from '../../core/model/screen';\nexport const list = (c: ScreenCode) => [AccessStore, Actions, c];\n",
+        "src/app/inventory/components/c.ts":
+          "import { IdentityPort } from '../../core/data/identity.port';\nimport { Session } from '../../core/model/session';\nexport const c = (s: Session) => [IdentityPort, s];\n",
+      },
+    },
+    {
+      title: "core/data/, core/routing/, app.config.ts and app.routes.ts wire the identity adapter side",
+      files: {
+        ...MODEL,
+        ...PORTS,
+        ...ADAPTER_SIDE,
+        "src/app/core/routing/demo-mode.guard.ts": "import { DATA_MODE } from '../data/data-mode';\nexport const demoModeGuard = () => DATA_MODE === 'DATA_MODE';\n",
+        "src/app/core/routing/session.guard.ts": "import { AccessStore } from '../data/access.store';\nexport const sessionGuard = () => AccessStore;\n",
+        "src/app/core/routing/require-screen.ts": "export const requireScreen = (screen: string) => ({ data: { screen } });\n",
+        "src/app/core/routing/identity-routing.providers.ts": "import { AccessStore } from '../data/access.store';\nexport const provideIdentityRouting = () => [AccessStore];\n",
+        "src/app/core/pages/access-denied.page.ts": "export class AccessDeniedPage {}\n",
+        "src/app/app.config.ts":
+          "import { provideIdentityData } from './core/data/identity-data.providers';\nimport { provideIdentityRouting } from './core/routing/identity-routing.providers';\nexport const appConfig = { providers: [provideIdentityData(), provideIdentityRouting()] };\n",
+        "src/app/app.routes.ts":
+          "import { demoModeGuard } from './core/routing/demo-mode.guard';\nimport { sessionGuard } from './core/routing/session.guard';\nimport { requireScreen } from './core/routing/require-screen';\nexport const routes = [{ path: 'entrada', canMatch: [demoModeGuard] }, { path: 'sin-permiso', canMatch: [sessionGuard], loadComponent: () => import('./core/pages/access-denied.page').then((m) => m.AccessDeniedPage) }, { path: 'catalogo', ...requireScreen('sample.catalog.01') }];\n",
+      },
+    },
+  ];
+  for (const c of CONTROLS) {
+    it(`[EP00-TBR-005-CA7] passes (exit 0) when ${c.title}`, { timeout: TEST_TIMEOUT_MS }, async () => {
+      const result = await cruise(makeFixture(c.files));
+      assert.equal(result.status, 0, `esta importación debe estar permitida (${c.title}):\n${result.stdout}${result.stderr}`);
+    });
+  }
+});
+
 // [EP00-TBR-003-CA4] The rule watches the views of every module and blocks exactly the adapter-side files (design §8.4
 // convention: *.adapter.ts, *.fixture.ts and *.providers.ts directly in data/, plus core/data/data-mode.ts and core/data/in-memory-failure.ts).
-test("[EP00-TBR-003-CA4] views-no-adapter watches pages/ and components/ of every module and blocks only adapter-side files", () => {
+test("[EP00-TBR-003-CA4][EP00-TBR-005-CA7] views-no-adapter watches pages/ and components/ of every module and of core/ and blocks only adapter-side files", () => {
   const rule = config.forbidden.find((r) => r.name === "views-no-adapter");
   assert.ok(rule, "falta la regla views-no-adapter en .dependency-cruiser.cjs (EP00-TBR-003-CA4)");
   assert.equal(rule.severity, "error");
@@ -516,6 +693,12 @@ test("[EP00-TBR-003-CA4] views-no-adapter watches pages/ and components/ of ever
   for (const m of MODULES)
     for (const p of [`src/app/${m}/pages/list.page.ts`, `src/app/${m}/components/row/row.ts`])
       assert.ok(matches(rule.from, p), `la regla debe vigilar las importaciones que salen de ${p}`);
+  // [EP00-TBR-005-CA7] The views of core/ too (core/pages/ holds the entry and «sin permisos»).
+  for (const p of ["src/app/core/pages/demo-sign-in.page.ts", "src/app/core/pages/access-denied.page.ts", "src/app/core/components/x/x.ts"])
+    assert.ok(matches(rule.from, p), `la regla debe vigilar las importaciones que salen de ${p}`);
+  for (const p of ["src/app/core/routing/session.guard.ts", "src/app/core/routing/identity-routing.providers.ts", "src/app/core/data/access.store.ts",
+    "src/app/core/data/identity-data.providers.ts", "src/app/core/model/session.ts"])
+    assert.ok(!matches(rule.from, p), `la regla no debe vigilar lo que sale de ${p} (no es una vista)`);
   for (const p of ["src/app/catalog/data/catalog-data.providers.ts", "src/app/catalog/model/product.ts", "src/app/catalog/index.ts",
     "src/app/app.config.ts", "src/app/app.routes.ts", "src/app/core/data/data-mode.ts", "src/ui/components/data-table/data-table.ts"])
     assert.ok(!matches(rule.from, p), `la regla no debe vigilar lo que sale de ${p} (no es una vista)`);
@@ -523,6 +706,14 @@ test("[EP00-TBR-003-CA4] views-no-adapter watches pages/ and components/ of ever
     "src/app/catalog/data/products.fixture.ts", "src/app/catalog/data/catalog-data.providers.ts",
     "src/app/core/data/data-mode.ts", "src/app/core/data/in-memory-failure.ts"])
     assert.ok(matches(rule.to, p), `${p} es del lado del adaptador y debe quedar prohibido para las vistas`);
+  // [EP00-TBR-005-CA7] Identity side of core/data/ (design EP00-TBR-005 §2 and §9).
+  for (const p of ["src/app/core/data/in-memory-identity.adapter.ts", "src/app/core/data/in-memory-demo-profiles.adapter.ts",
+    "src/app/core/data/in-memory-screen-catalog.adapter.ts", "src/app/core/data/demo-profiles.fixture.ts",
+    "src/app/core/data/screen-catalog.fixture.ts", "src/app/core/data/identity-data.providers.ts"])
+    assert.ok(matches(rule.to, p), `${p} es del lado del adaptador de identidad y debe quedar prohibido para las vistas`);
+  for (const p of ["src/app/core/data/identity.port.ts", "src/app/core/data/demo-profiles.port.ts", "src/app/core/data/screen-catalog.port.ts",
+    "src/app/core/data/access.store.ts", "src/app/core/model/session.ts", "src/app/core/model/action.ts", "src/app/core/model/screen.ts"])
+    assert.ok(!matches(rule.to, p), `${p} debe quedar permitido para las vistas (EP00-TBR-005-CA7)`);
   for (const p of ["src/app/catalog/data/product.port.ts", "src/app/catalog/data/product.mapper.ts", "src/app/catalog/model/product.ts",
     "src/app/core/data/page.ts", "src/app/core/data/api-error.ts", "src/app/core/data/paged-list.port.ts", "src/app/catalog/index.ts", "src/ui/index.ts"])
     assert.ok(!matches(rule.to, p), `${p} debe quedar permitido para las vistas`);
@@ -595,9 +786,11 @@ describe("[EP00-TBR-014-CA6] module list of .dependency-cruiser.cjs against the 
 
 // [EP00-TBR-003-CA1] Demo data only in the data/ layer of a module (approved by Elkin, option a): no *.fixture.ts may
 // exist under src/ outside src/app/<module>/data/, with <module> one of the fixed table (MODULES).
+// [EP00-TBR-005-CA7] DA-1 (approved by Elkin, 2026-11-13): also exactly src/app/core/data/*.fixture.ts (the demo identity
+// fixtures), directly in that folder; nowhere else under core/.
 // Static check over the file tree: it returns the misplaced fixtures, relative to root and with forward slashes.
 const FIXTURE_FILE = /\.fixture\.ts$/;
-const FIXTURE_HOME = new RegExp(`^src/app/(${MODULES.join("|")})/data/(.+/)?[^/]+\\.fixture\\.ts$`);
+const FIXTURE_HOME = new RegExp(`^src/app/((${MODULES.join("|")})/data/(.+/)?|core/data/)[^/]+\\.fixture\\.ts$`);
 
 function fixturesUnder(root) {
   const found = [];
@@ -614,7 +807,7 @@ function fixturesUnder(root) {
 
 const misplacedFixtures = (root) => fixturesUnder(root).filter((path) => !FIXTURE_HOME.test(path));
 
-describe("[EP00-TBR-003-CA1] demo fixtures live only in src/app/<module>/data/", () => {
+describe("[EP00-TBR-003-CA1][EP00-TBR-005-CA7] demo fixtures live only in src/app/<module>/data/ or directly in src/app/core/data/", () => {
   it("[EP00-TBR-003-CA1] the repository has no *.fixture.ts outside src/app/<module>/data/", () => {
     const misplaced = misplacedFixtures(FRONT);
     assert.deepEqual(misplaced, [], `fixtures fuera de src/app/<módulo>/data/: ${misplaced.join(", ")}`);
@@ -625,13 +818,46 @@ describe("[EP00-TBR-003-CA1] demo fixtures live only in src/app/<module>/data/",
     assert.ok(all.includes("src/app/catalog/data/products.fixture.ts"), `no se encontró el fixture del catálogo: ${all.join(", ")}`);
   });
 
-  it("[EP00-TBR-003-CA1] a fixture placed outside a module data/ folder is reported (synthetic tree under tmp/)", () => {
+  it("[EP00-TBR-005-CA7] the walk sees the demo identity fixtures in src/app/core/data/ and accepts them (control, DA-1)", () => {
+    const all = fixturesUnder(FRONT);
+    for (const f of ["src/app/core/data/demo-profiles.fixture.ts", "src/app/core/data/screen-catalog.fixture.ts"]) {
+      assert.ok(all.includes(f), `no se encontró ${f}: ${all.join(", ")}`);
+      assert.ok(FIXTURE_HOME.test(f), `${f} debe quedar admitido (DA-1)`);
+    }
+  });
+
+  it("[EP00-TBR-005-CA7] DA-1 admits exactly src/app/core/data/*.fixture.ts and nothing else under core/ (synthetic tree under tmp/)", () => {
+    const dir = makeFixture({
+      "src/app/core/data/demo-profiles.fixture.ts": "export const OK = 1;\n",
+      "src/app/core/data/screen-catalog.fixture.ts": "export const OK = 2;\n",
+      "src/app/core/data/nested/deep.fixture.ts": "export const BAD = 1;\n",
+      "src/app/core/pages/x.fixture.ts": "export const BAD = 2;\n",
+      "src/app/core/components/x.fixture.ts": "export const BAD = 3;\n",
+      "src/app/core/model/x.fixture.ts": "export const BAD = 4;\n",
+      "src/app/core/routing/x.fixture.ts": "export const BAD = 5;\n",
+      "src/app/core/x.fixture.ts": "export const BAD = 6;\n",
+      "src/app/corex/data/x.fixture.ts": "export const BAD = 7;\n",
+      "src/app/xcore/data/x.fixture.ts": "export const BAD = 8;\n",
+    });
+    assert.deepEqual(misplacedFixtures(dir), [
+      "src/app/core/components/x.fixture.ts",
+      "src/app/core/data/nested/deep.fixture.ts",
+      "src/app/core/model/x.fixture.ts",
+      "src/app/core/pages/x.fixture.ts",
+      "src/app/core/routing/x.fixture.ts",
+      "src/app/core/x.fixture.ts",
+      "src/app/corex/data/x.fixture.ts",
+      "src/app/xcore/data/x.fixture.ts",
+    ]);
+  });
+
+  it("[EP00-TBR-003-CA1][EP00-TBR-005-CA7] a fixture placed outside a module data/ folder (or core/data/, DA-1) is reported (synthetic tree under tmp/)", () => {
     const dir = makeFixture({
       "src/app/catalog/data/products.fixture.ts": "export const OK = 1;\n",
       "src/app/catalog/data/demo/nested.fixture.ts": "export const OK = 2;\n",
       "src/app/catalog/pages/list.fixture.ts": "export const BAD = 1;\n",
       "src/app/catalog/components/card.fixture.ts": "export const BAD = 2;\n",
-      "src/app/core/data/core.fixture.ts": "export const BAD = 3;\n",
+      "src/app/core/data/core.fixture.ts": "export const OK_SINCE_DA_1 = 3;\n",
       "src/app/sales/data/unknown.fixture.ts": "export const BAD = 4;\n",
       "src/ui/components/data-table/rows.fixture.ts": "export const BAD = 5;\n",
       "src/demo.fixture.ts": "export const BAD = 6;\n",
@@ -640,7 +866,6 @@ describe("[EP00-TBR-003-CA1] demo fixtures live only in src/app/<module>/data/",
     assert.deepEqual(misplacedFixtures(dir), [
       "src/app/catalog/components/card.fixture.ts",
       "src/app/catalog/pages/list.fixture.ts",
-      "src/app/core/data/core.fixture.ts",
       "src/app/sales/data/unknown.fixture.ts",
       "src/demo.fixture.ts",
       "src/ui/components/data-table/rows.fixture.ts",
