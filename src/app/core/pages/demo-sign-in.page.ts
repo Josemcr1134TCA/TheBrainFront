@@ -5,10 +5,9 @@ import { catchError, of } from 'rxjs';
 import { TbBanner, TbSkeleton } from '../../../ui';
 import { AccessStore } from '../data/access.store';
 import { DemoProfilesPort } from '../data/demo-profiles.port';
+import { IDENTITY_UNAVAILABLE_MESSAGE } from '../data/identity.port';
 import { Profile } from '../model/profile';
 import { safeReturnUrl } from '../routing/return-url';
-
-const IDENTITY_ERROR = 'La identidad no está disponible por ahora. Elige un perfil otra vez.';
 
 /** Avatar mark: the trailing number of the name («Perfil de demostración 4» -> «4»), else its first letter. */
 function initialOf(name: string): string {
@@ -46,9 +45,9 @@ export class DemoSignInPage {
   protected readonly errorText = computed(() => {
     const failure = this.failed();
     if (failure === null) return null;
-    if (failure === 'load') return IDENTITY_ERROR;
+    if (failure === 'load') return IDENTITY_UNAVAILABLE_MESSAGE;
     const active = this.store.session()?.profile.name;
-    return active ? `No pudimos cambiar de perfil. Sigues con ${active}.` : IDENTITY_ERROR;
+    return active ? `No pudimos cambiar de perfil. Sigues con ${active}.` : IDENTITY_UNAVAILABLE_MESSAGE;
   });
 
   constructor() {
