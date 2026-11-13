@@ -23,6 +23,7 @@ import { DEMO_SESSION_STORAGE } from '../data/in-memory-identity.adapter';
 import { AccessDeniedPage } from '../pages/access-denied.page';
 import { DemoSignInPage } from '../pages/demo-sign-in.page';
 import { demoModeGuard } from './demo-mode.guard';
+import { requireScreen } from './require-screen';
 import { screenGuard } from './screen.guard';
 import { sessionGuard } from './session.guard';
 
@@ -118,6 +119,66 @@ describe('[EP00-TBR-005-CA4][EP00-TBR-005-CA5] app.routes.ts declares the identi
     expect(found?.route.canMatch ?? []).toContain(screenGuard);
     expect(found?.ancestors.flatMap((r) => r.canMatch ?? [])).toContain(sessionGuard);
     expect(catalogCode()).toMatch(/^sample\./);
+  });
+});
+
+// S1 (revisor-seguridad): every leaf under the protected block '' (session required) must declare its own screen code
+// with requireScreen (screenGuard in canMatch and a non-empty data.screen). A route with loadChildren is a leaf at the
+// level declared in app.routes.ts. Exceptions must be listed here with a reason; today there are none.
+const SCREEN_GUARD_EXCEPTIONS: ReadonlySet<string> = new Set<string>([]);
+
+const fullPath = (chain: Route[]) => '/' + chain.map((r) => r.path ?? '').filter((p) => p !== '').join('/');
+
+function protectedLeaves(routes: Routes): { path: string; route: Route }[] {
+  const leaves: { path: string; route: Route }[] = [];
+  const walk = (list: Routes, chain: Route[]) => {
+    for (const r of list) {
+      const next = [...chain, r];
+      if (r.children?.length) walk(r.children, next);
+      else leaves.push({ path: fullPath(next), route: r });
+    }
+  };
+  for (const block of routes.filter((r) => r.path === '' && (r.canMatch ?? []).includes(sessionGuard))) {
+    walk(block.children ?? [], [block]);
+  }
+  return leaves;
+}
+
+function leavesWithoutScreen(routes: Routes): string[] {
+  return protectedLeaves(routes)
+    .filter(({ path }) => !SCREEN_GUARD_EXCEPTIONS.has(path))
+    .filter(({ route }) => {
+      const screen = route.data?.['screen'];
+      return !(route.canMatch ?? []).includes(screenGuard) || typeof screen !== 'string' || screen.trim() === '';
+    })
+    .map(({ path }) => path);
+}
+
+describe('[EP00-TBR-005-CA5] every protected route declares its screen (S1)', () => {
+  it('[EP00-TBR-005-CA5] app.routes.ts has at least one protected leaf and every one declares screenGuard and data.screen', () => {
+    expect(protectedLeaves(appRoutes).map((l) => l.path)).toContain('/catalogo');
+    expect(SCREEN_GUARD_EXCEPTIONS.size).toBe(0);
+    expect(leavesWithoutScreen(appRoutes)).toEqual([]);
+  });
+
+  it('[EP00-TBR-005-CA5] the check fails on a synthetic tree with a protected leaf without requireScreen', () => {
+    const load = () => Promise.resolve([] as Routes);
+    const synthetic: Routes = [
+      { path: 'entrada', loadChildren: load },
+      {
+        path: '',
+        canMatch: [sessionGuard],
+        children: [
+          { path: 'catalogo', ...requireScreen('sample.catalog.01'), loadChildren: load },
+          { path: 'sin-pantalla', loadChildren: load },
+          { path: 'pantalla-vacia', canMatch: [screenGuard], data: { screen: '' }, loadChildren: load },
+          { path: 'solo-dato', data: { screen: 'sample.x.01' }, loadChildren: load },
+          { path: 'grupo', children: [{ path: 'hija', loadChildren: load }] },
+        ],
+      },
+    ];
+
+    expect(leavesWithoutScreen(synthetic)).toEqual(['/sin-pantalla', '/pantalla-vacia', '/solo-dato', '/grupo/hija']);
   });
 });
 

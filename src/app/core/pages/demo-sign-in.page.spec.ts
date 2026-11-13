@@ -3,8 +3,10 @@
 // error-cambio; propuesta.md §1, §3, §6, §7; PA-1, PA-4, PA-5, PA-7, PA-9; approved by the PO on 2026-11-13).
 // [EP00-TBR-005-CA4] The entry is the selector: demo notice («Información.» + text, D2), title «Elige un perfil», eight profile rows with
 //                    only the name; choosing one signs in and returns to safeReturnUrl(returnUrl) (internal only).
-// [EP00-TBR-005-CA6] When the identity does not respond: error banner «Error. La identidad no está disponible por
-//                    ahora. Elige un perfil otra vez.» inside the card, the person stays at the entry, no session, and
+// [EP00-TBR-005-CA6] When the identity does not respond: TbBanner level error (bold word «Error», set by the banner)
+//                    with the text «La identidad no está disponible por ahora. Elige un perfil otra vez.» (one source:
+//                    IDENTITY_UNAVAILABLE_MESSAGE in identity.port.ts, without its own «Error.» prefix) inside the
+//                    card, the person stays at the entry, no session, and
 //                    can choose again; VALIDATION and any non-ApiError show the same text (PA-1); codes never shown.
 // [EP00-TBR-005-CA3] With a session open (P-2): the active profile is marked (✓, aria-current, «Perfil activo» for
 //                    screen readers); choosing another switches the profile and returns; choosing the active one does
@@ -29,7 +31,7 @@ import { ApiError } from '../data/api-error';
 import { provideDataMode } from '../data/data-mode';
 import { DemoProfilesPort } from '../data/demo-profiles.port';
 import { provideIdentityData } from '../data/identity-data.providers';
-import { IdentityGrantDto, IdentityPort } from '../data/identity.port';
+import { IDENTITY_UNAVAILABLE_MESSAGE, IdentityGrantDto, IdentityPort } from '../data/identity.port';
 import { IN_MEMORY_FAILURE } from '../data/in-memory-failure';
 import { DEMO_SESSION_STORAGE } from '../data/in-memory-identity.adapter';
 import { ScreenCatalogPort } from '../data/screen-catalog.port';
@@ -352,6 +354,24 @@ describe('[EP00-TBR-005-CA6] DemoSignInPage: identity not available (state «err
       expect(flat(root(ctx))).not.toContain('Referencia');
     });
   }
+
+  it('[EP00-TBR-005-CA6] on UNAVAILABLE the banner text is exactly the port message (one source) and «Error» appears once', async () => {
+    expect(IDENTITY_UNAVAILABLE_MESSAGE).toBe(IDENTITY_ERROR);
+    expect(IDENTITY_UNAVAILABLE_MESSAGE).not.toMatch(/^Error\b/);
+    const ctx = await open();
+    ctx.identity.next = new ApiError({ code: 'UNAVAILABLE', message: 'x', field: null });
+
+    await choose(ctx, 'Sistemas');
+
+    // TbBanner renders <b>{word}</b> followed by the projected text; the spacing between them is CSS.
+    const banner = alert(ctx);
+    const bold = banner?.querySelector('b') ?? null;
+    expect(flat(bold)).toBe(ERROR_WORD);
+    const text = flat(banner);
+    expect(text.slice(ERROR_WORD.length).trim()).toBe(IDENTITY_UNAVAILABLE_MESSAGE);
+    expect(text).not.toMatch(/Error\.?\s*Error/);
+    expect(text.split(ERROR_WORD)).toHaveLength(2);
+  });
 
   it('[EP00-TBR-005-CA6] VALIDATION (unknown profile) shows the same text as UNAVAILABLE (PA-1)', async () => {
     const profiles = new FakeDemoProfilesPort();
