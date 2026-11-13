@@ -530,3 +530,88 @@ describe('[EP00-TBR-005-CA3] profile change over the current screen', () => {
     expect(primaryPath(ctx)).toBe('/entrada');
   });
 });
+
+// ---------- CA3 edge cases after round 2 of T2 (shouldAttach), final quality review ----------
+
+describe('[EP00-TBR-005-CA3] epoch edge cases (final quality review)', () => {
+  const signOut = (ctx: Ctx) =>
+    new Promise<void>((done) => ctx.store.signOut().subscribe({ complete: () => done(), error: () => done() }));
+
+  it('[EP00-TBR-005-CA3] a normal navigation under the same epoch does not rebuild the screen (no regression)', async () => {
+    const ctx = await start();
+    await signIn(ctx, P1);
+    await go(ctx, '/zona-a?pagina=1');
+
+    await go(ctx, '/zona-a?pagina=2');
+
+    expect(counts.screenA).toBe(1);
+    expect(counts.loadA).toBe(1);
+    expect(ctx.location.path()).toBe('/zona-a?pagina=2');
+  });
+
+  it('[EP00-TBR-005-CA3] after a rebuild by a profile change, a normal navigation does not rebuild it again', async () => {
+    const ctx = await start();
+    await signIn(ctx, P1);
+    await go(ctx, '/zona-a?pagina=1');
+    await switchTo(ctx, P4);
+    expect(counts.screenA).toBe(2);
+
+    await go(ctx, '/zona-a?pagina=2');
+
+    expect(counts.screenA).toBe(2);
+    expect(text(ctx)).toContain('Perfil de prueba 4');
+  });
+
+  it('[EP00-TBR-005-CA3] restored session + direct link: a switch to a profile with view rebuilds the screen', async () => {
+    const ctx = await start({ restoreWith: P1 });
+    await go(ctx, '/zona-a');
+    expect(counts.screenA).toBe(1);
+
+    await switchTo(ctx, P4);
+
+    expect(counts.screenA).toBe(2);
+    expect(text(ctx)).toContain('Perfil de prueba 4');
+    expect(text(ctx)).not.toContain('Perfil de prueba 1');
+    expect(ctx.location.path()).toBe('/zona-a');
+  });
+
+  it('[EP00-TBR-005-CA3] restored session + direct link: a switch to a profile without view shows «sin permisos» and no previous data', async () => {
+    const ctx = await start({ restoreWith: P1 });
+    await go(ctx, '/zona-a');
+
+    await switchTo(ctx, P2);
+
+    expect(shown(ctx, '.denied')).toBe(true);
+    expect(shown(ctx, '.screen-a')).toBe(false);
+    expect(text(ctx)).not.toContain('Perfil de prueba 1');
+    expect(ctx.location.path()).toBe('/zona-a');
+  });
+
+  it('[EP00-TBR-005-CA4] signing out over «sin permisos» goes to the entry', async () => {
+    const ctx = await start();
+    await signIn(ctx, P2);
+    await go(ctx, '/zona-a');
+    expect(shown(ctx, '.denied')).toBe(true);
+
+    await signOut(ctx);
+    await settle(ctx);
+
+    expect(shown(ctx, '.denied')).toBe(false);
+    expect(primaryPath(ctx)).toBe('/entrada');
+  });
+
+  it('[EP00-TBR-005-CA3] sign out and sign in with another profile: the screen is built with the new profile only', async () => {
+    const ctx = await start();
+    await signIn(ctx, P1);
+    await go(ctx, '/zona-a');
+    await signOut(ctx);
+    await settle(ctx);
+
+    await signIn(ctx, P4);
+    await go(ctx, '/zona-a');
+
+    expect(shown(ctx, '.screen-a')).toBe(true);
+    expect(text(ctx)).toContain('Perfil de prueba 4');
+    expect(text(ctx)).not.toContain('Perfil de prueba 1');
+  });
+});
