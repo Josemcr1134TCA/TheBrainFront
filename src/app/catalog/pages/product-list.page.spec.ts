@@ -17,6 +17,7 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { RouterTestingHarness } from '@angular/router/testing';
 import { firstValueFrom, Observable, of, Subject, throwError } from 'rxjs';
 import { appConfig } from '../../app.config';
+import { AccessStore } from '../../core/data/access.store';
 import { ApiError, ApiErrorCode } from '../../core/data/api-error';
 import { provideDataMode } from '../../core/data/data-mode';
 import { IN_MEMORY_FAILURE } from '../../core/data/in-memory-failure';
@@ -270,7 +271,9 @@ function expectNoList(el: HTMLElement) {
 describe('[EP00-TBR-003-CA1] catalog screen in memory mode (route /catalogo)', () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it('[EP00-TBR-003-CA1] navigating to /catalogo renders ProductListPage with the first 20 demo products and no network call', async () => {
+  // Since EP00-TBR-005 /catalogo needs a session (CA4) and view on its sample screen (CA5): the arrangement enters with a
+  // demonstration profile that has it («Sistemas», demo-1) and signs out at the end so nothing stays in sessionStorage.
+  it('[EP00-TBR-003-CA1][EP00-TBR-005-CA4][EP00-TBR-005-CA5] navigating to /catalogo (signed in with a demo profile with view) renders ProductListPage with the first 20 demo products and no network call', async () => {
     const fetchSpy =
       typeof globalThis.fetch === 'function' ? vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('sin red')) : null;
     const xhrSpy = vi.spyOn(XMLHttpRequest.prototype, 'open');
@@ -279,6 +282,9 @@ describe('[EP00-TBR-003-CA1] catalog screen in memory mode (route /catalogo)', (
     });
 
     const harness = await RouterTestingHarness.create();
+    const access = TestBed.inject(AccessStore);
+    await firstValueFrom(access.signIn({ kind: 'demo', profileId: 'demo-1' }));
+    onTestFinished(() => firstValueFrom(access.signOut(), { defaultValue: undefined }).then(() => undefined));
     const page = await harness.navigateByUrl('/catalogo', ProductListPage);
     harness.detectChanges();
     await harness.fixture.whenStable();

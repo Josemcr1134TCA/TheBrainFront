@@ -1,7 +1,7 @@
 // Black-box tests of the demo entry page (profile selector, route /entrada), design EP00-TBR-005 §7.2, §7.4 and §8;
 // approved UI docs/ui/EP00-TBR-005/ (index.html states normal, con-sesion, entrando, cambiando, cargando, error,
 // error-cambio; propuesta.md §1, §3, §6, §7; PA-1, PA-4, PA-5, PA-7, PA-9; approved by the PO on 2026-11-13).
-// [EP00-TBR-005-CA4] The entry is the selector: «Demostración» notice, title «Elige un perfil», eight profile rows with
+// [EP00-TBR-005-CA4] The entry is the selector: demo notice («Información.» + text, D2), title «Elige un perfil», eight profile rows with
 //                    only the name; choosing one signs in and returns to safeReturnUrl(returnUrl) (internal only).
 // [EP00-TBR-005-CA6] When the identity does not respond: error banner «Error. La identidad no está disponible por
 //                    ahora. Elige un perfil otra vez.» inside the card, the person stays at the entry, no session, and
@@ -10,6 +10,9 @@
 //                    screen readers); choosing another switches the profile and returns; choosing the active one does
 //                    nothing and returns (PA-5); a failed change says «No pudimos cambiar de perfil. Sigues con …» (P-3).
 // PA-4: «Entrando…» / «Cambiando…» on the chosen row and every row disabled while the request is in flight.
+// Round 2 of the UI (2026-11-13, T4): D2 the notice is TbBanner level info as it is, so its bold word is «Información»
+// and the text «Estás en modo demostración: los perfiles son de muestra.»; D3 VALIDATION while switching shows the
+// switch-failure text; D7 a failure loading the profile list shows the CA6 text.
 // Contract assumed for T3: class DemoSignInPage, standalone, in ./demo-sign-in.page.ts; it injects AccessStore and
 // DemoProfilesPort; rows use the approved anatomy (button.tb-mi), the notice and the error use TbBanner (.tb-banner).
 // Written before the code (T1). Synthetic data only.
@@ -35,8 +38,9 @@ import { DemoSignInPage } from './demo-sign-in.page';
 // ---------- approved texts (propuesta.md §6) ----------
 
 const TITLE = 'Elige un perfil';
-const NOTICE_WORD = 'Demostración';
-const NOTICE_TEXT = 'Los perfiles son de muestra.';
+// D2 (UI round 2): the word is the one TbBanner sets for level info.
+const NOTICE_WORD = 'Información';
+const NOTICE_TEXT = 'Estás en modo demostración: los perfiles son de muestra.';
 const ERROR_WORD = 'Error';
 const IDENTITY_ERROR = 'La identidad no está disponible por ahora. Elige un perfil otra vez.';
 const switchError = (name: string) => `No pudimos cambiar de perfil. Sigues con ${name}.`;
@@ -203,7 +207,7 @@ describe('[EP00-TBR-005-CA4] DemoSignInPage: entry without a session (state «no
     expect(flat(root(ctx).querySelector('h1'))).toBe(TITLE);
   });
 
-  it('[EP00-TBR-005-CA4] shows the «Demostración» notice as an info banner with role="status" (S10)', async () => {
+  it('[EP00-TBR-005-CA4] shows the demo notice as an info banner with role="status" and the approved text (S10, D2)', async () => {
     const ctx = await open();
 
     const banner = notice(ctx);
@@ -213,7 +217,7 @@ describe('[EP00-TBR-005-CA4] DemoSignInPage: entry without a session (state «no
     expect(flat(banner)).toContain(NOTICE_WORD);
   });
 
-  it('[EP00-TBR-005-CA4] the bold word of the notice is «Demostración» (approved prototype)', async () => {
+  it('[EP00-TBR-005-CA4] the bold word of the notice is «Información», the one of TbBanner level info (D2)', async () => {
     const ctx = await open();
 
     expect(flat(notice(ctx)?.querySelector('b') ?? null).replace(/\.$/, '')).toBe(NOTICE_WORD);
@@ -362,7 +366,7 @@ describe('[EP00-TBR-005-CA6] DemoSignInPage: identity not available (state «err
     expect(flat(root(ctx))).not.toMatch(CODE_WORDS);
   });
 
-  it('[EP00-TBR-005-CA6] the error sits inside the card and the «Demostración» notice stays (PA-7)', async () => {
+  it('[EP00-TBR-005-CA6] the error sits inside the card and the demo notice stays outside it (PA-7)', async () => {
     const ctx = await open();
     ctx.identity.next = new ApiError({ code: 'UNAVAILABLE', message: 'x', field: null });
 
@@ -470,5 +474,53 @@ describe('[EP00-TBR-005-CA3] DemoSignInPage with a session open (states «con-se
     expect(rows(ctx).some(disabled)).toBe(false);
     expect(path(ctx)).toBe('/entrada');
     expect(flat(root(ctx))).not.toMatch(CODE_WORDS);
+  });
+
+  it('[EP00-TBR-005-CA3] VALIDATION while switching (unknown profile) shows the switch-failure text and keeps the previous profile (D3)', async () => {
+    const profiles = new FakeDemoProfilesPort();
+    profiles.list$ = of([...PROFILES.slice(0, 7), { id: 'demo-test-missing', name: 'Perfil de demostración 8', synthetic: true }]);
+    const ctx = await open(undefined, { profiles }, signedInAs(ACTIVE));
+    const session = ctx.store.session();
+
+    await choose(ctx, 'Perfil de demostración 8');
+
+    const banner = alert(ctx);
+    expect(flat(banner)).toContain(switchError(ACTIVE));
+    expect(flat(banner)).not.toContain(IDENTITY_ERROR);
+    expect(ctx.store.session()).toBe(session);
+    expect(path(ctx)).toBe('/entrada');
+    expect(flat(root(ctx))).not.toMatch(CODE_WORDS);
+  });
+});
+
+// ---------- profile list failure (D7) ----------
+
+describe('[EP00-TBR-005-CA6] DemoSignInPage: the profile list fails to load (D7)', () => {
+  const failingList = () => {
+    const profiles = new FakeDemoProfilesPort();
+    profiles.list$ = throwError(() => new ApiError({ code: 'UNAVAILABLE', message: 'Lista caída (prueba).', field: null }));
+    return profiles;
+  };
+
+  it('[EP00-TBR-005-CA6] without a session: the CA6 error text, no skeleton left, stays at the entry and no session (D7)', async () => {
+    const ctx = await open(undefined, { profiles: failingList() });
+
+    const banner = alert(ctx);
+    expect(flat(banner)).toContain(IDENTITY_ERROR);
+    expect(flat(banner?.querySelector('b') ?? null).replace(/\.$/, '')).toBe(ERROR_WORD);
+    expect(root(ctx).querySelector('[aria-busy="true"]')).toBeNull();
+    expect(path(ctx)).toBe('/entrada');
+    expect(ctx.store.session()).toBeNull();
+    expect(flat(root(ctx))).not.toContain('Lista caída (prueba).');
+    expect(flat(root(ctx))).not.toMatch(CODE_WORDS);
+  });
+
+  it('[EP00-TBR-005-CA6] with a session open: still the CA6 error text, not the switch-failure text (no switch was tried) (D7)', async () => {
+    const ctx = await open(undefined, { profiles: failingList() }, signedInAs('Perfil de demostración 3'));
+
+    const banner = alert(ctx);
+    expect(flat(banner)).toContain(IDENTITY_ERROR);
+    expect(flat(banner)).not.toContain('No pudimos cambiar de perfil');
+    expect(ctx.store.session()?.profile.name).toBe('Perfil de demostración 3');
   });
 });

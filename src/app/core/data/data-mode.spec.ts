@@ -90,17 +90,31 @@ function collectProviders(routes: Routes): (Provider | EnvironmentProviders)[] {
   return routes.flatMap((r: Route) => [...(r.providers ?? []), ...collectProviders(r.children ?? [])]);
 }
 
-// The catalog routes as the app registers them in app.routes.ts (loadChildren, DEC-0014) or as inline children.
+// Path from the root of a route tree to the route with `path`, at any depth (EP00-TBR-005 nests the protected routes
+// under a session-guarded parent, CA4/CA5); [] when it is not there.
+function findRoutePath(routes: Routes, path: string): Route[] {
+  for (const r of routes) {
+    if (r.path === path) return [r];
+    const below = findRoutePath(r.children ?? [], path);
+    if (below.length > 0) return [r, ...below];
+  }
+  return [];
+}
+
+// The catalog routes as the app registers them in app.routes.ts (loadChildren, DEC-0014) or as inline children,
+// together with their ancestors in the tree (whose providers the route would also see).
 async function catalogRoutes(): Promise<Routes> {
-  const route = appRoutes.find((r) => r.path === CATALOG_PATH);
+  const chain = findRoutePath(appRoutes, CATALOG_PATH);
+  const route = chain.at(-1);
   expect(route, `falta la ruta '${CATALOG_PATH}' en app.routes.ts`).toBeTruthy();
+  const ancestors = chain.slice(0, -1).map((r) => ({ ...r, children: [] }));
   if (route?.loadChildren) {
     const loaded: unknown = await route.loadChildren();
     const children = (Array.isArray(loaded) ? loaded : (loaded as { default?: Routes }).default) as Routes | undefined;
     expect(Array.isArray(children), 'loadChildren de catalogo debe entregar sus rutas').toBe(true);
-    return [route, ...(children ?? [])];
+    return [...ancestors, route, ...(children ?? [])];
   }
-  return [route as Route];
+  return [...ancestors, route as Route];
 }
 
 describe('[EP00-TBR-003-CA1][EP00-TBR-003-CA2] the real app configuration (appConfig and the catalog routes)', () => {
@@ -112,7 +126,7 @@ describe('[EP00-TBR-003-CA1][EP00-TBR-003-CA2] the real app configuration (appCo
     expect(TestBed.inject(DATA_MODE)).toBe('memory');
   });
 
-  it('[EP00-TBR-003-CA1] the catalog route resolves ProductPort to the in-memory adapter and lists the demo products', async () => {
+  it('[EP00-TBR-003-CA1][EP00-TBR-005-CA4][EP00-TBR-005-CA5] the catalog route (inside the protected tree) resolves ProductPort to the in-memory adapter and lists the demo products', async () => {
     const injector = createEnvironmentInjector(collectProviders(await catalogRoutes()), TestBed.inject(EnvironmentInjector));
 
     const port = injector.get(ProductPort);
@@ -126,7 +140,7 @@ describe('[EP00-TBR-003-CA1][EP00-TBR-003-CA2] the real app configuration (appCo
     expect(TestBed.inject(IN_MEMORY_FAILURE, null)).toBeNull();
   });
 
-  it('[EP00-TBR-003-CA2] IN_MEMORY_FAILURE resolves to null inside the catalog route providers', async () => {
+  it('[EP00-TBR-003-CA2][EP00-TBR-005-CA4][EP00-TBR-005-CA5] IN_MEMORY_FAILURE resolves to null inside the catalog route providers (inside the protected tree)', async () => {
     const injector = createEnvironmentInjector(collectProviders(await catalogRoutes()), TestBed.inject(EnvironmentInjector));
 
     expect(injector.get(IN_MEMORY_FAILURE, null)).toBeNull();

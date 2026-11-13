@@ -14,7 +14,7 @@
 import { Location } from '@angular/common';
 import { Component, inject } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
-import { provideRouter, Route, Router, Routes, UrlSegment } from '@angular/router';
+import { PartialMatchRouteSnapshot, provideRouter, Route, Router, Routes, UrlSegment } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
 import { firstValueFrom, isObservable, Observable, of, throwError } from 'rxjs';
 import { Screen, ScreenCode } from '../model/screen';
@@ -219,9 +219,11 @@ const pathOf = (ctx: Ctx) => ctx.router.parseUrl(ctx.router.url);
 const returnUrlOf = (ctx: Ctx) => pathOf(ctx).queryParams['returnUrl'] as string | undefined;
 const primaryPath = (ctx: Ctx) => '/' + (pathOf(ctx).root.children['primary']?.segments.map((s) => s.path).join('/') ?? '');
 
-// Runs a functional guard and resolves what it returns (value, promise or observable).
+// Runs a functional guard and resolves what it returns (value, promise or observable). Angular 22 passes a third
+// argument (the partial snapshot at match time); the guards under test do not read it, so a minimal one is enough.
 async function runGuard(guard: typeof screenGuard, route: Route): Promise<unknown> {
-  const result: unknown = TestBed.runInInjectionContext(() => guard(route, [] as UrlSegment[]));
+  const snapshot = { routeConfig: route, url: [], params: {}, queryParams: {}, fragment: null, data: route.data ?? {}, outlet: 'primary' } as unknown as PartialMatchRouteSnapshot;
+  const result: unknown = TestBed.runInInjectionContext(() => guard(route, [] as UrlSegment[], snapshot));
   if (isObservable(result)) return firstValueFrom(result);
   return await result;
 }
@@ -428,6 +430,20 @@ describe('[EP00-TBR-005-CA3] profile change over the current screen', () => {
     expect(text(ctx)).toContain('Perfil de prueba 4');
     expect(text(ctx)).not.toContain('Perfil de prueba 1');
     expect(ctx.location.path()).toBe('/zona-a');
+  });
+
+  it('[EP00-TBR-005-CA3] arriving at the screen from the entry, a switch to a profile with view rebuilds it with the new profile', async () => {
+    const ctx = await start();
+    await go(ctx, '/entrada?returnUrl=%2Fzona-a');
+    await signIn(ctx, P1);
+    await go(ctx, '/zona-a');
+    expect(counts.screenA).toBe(1);
+
+    await switchTo(ctx, P4);
+
+    expect(counts.screenA).toBe(2);
+    expect(text(ctx)).toContain('Perfil de prueba 4');
+    expect(text(ctx)).not.toContain('Perfil de prueba 1');
   });
 
   it('[EP00-TBR-005-CA3] from «sin permisos», a profile with view brings back the requested screen (visible URL, not /sin-permiso)', async () => {
